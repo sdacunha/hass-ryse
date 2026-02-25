@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import asyncio
 import logging
 import inspect
+from bleak.exc import BleakError
 from .ryse import RyseDevice
 from .const import HARDCODED_UUIDS, DEFAULT_INIT_TIMEOUT
 
@@ -203,21 +204,40 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                 return False
         return True
 
+    async def _execute_command(self, operation, *args) -> None:
+        """Execute a BLE command with one retry on connection drop."""
+        for attempt in range(2):
+            if not await self._ensure_connected():
+                return
+            try:
+                await operation(*args)
+                return
+            except (BleakError, ConnectionError) as e:
+                _LOGGER.warning(
+                    "[Coordinator] Command failed for %s (attempt %d): %s",
+                    self._name, attempt + 1, e,
+                )
+                # Force disconnect to clear stale state before retry
+                await self.device.disconnect()
+                if attempt == 0:
+                    _LOGGER.info("[Coordinator] Retrying command for %s", self._name)
+        # Both attempts failed
+        self._available = False
+        self._was_unavailable = True
+        self.async_update_listeners()
+
     async def async_set_position(self, position: int) -> None:
         """Set the cover position."""
-        if await self._ensure_connected():
-            await self.device.set_position(position)
+        await self._execute_command(self.device.set_position, position)
 
     async def async_open_cover(self) -> None:
         """Open the cover."""
         if self.position is not None and self.position == 0:
             return
-        if await self._ensure_connected():
-            await self.device.open()
+        await self._execute_command(self.device.open)
 
     async def async_close_cover(self) -> None:
         """Close the cover."""
         if self.position is not None and self.position == 100:
             return
-        if await self._ensure_connected():
-            await self.device.close() 
+        await self._execute_command(self.device.close) 
