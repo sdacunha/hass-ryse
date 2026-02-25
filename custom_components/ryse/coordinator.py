@@ -186,19 +186,19 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
 
     async def _ensure_connected(self) -> bool:
         """Ensure the device is connected before performing operations."""
-        if not self.device.client or not self.device.client.is_connected:
+        # Capture client ref to avoid race with _on_disconnected callback
+        client = self.device.client
+        if not client or not client.is_connected:
             ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
             if not ble_device:
                 self._available = False
                 self._was_unavailable = True
-                # ACTION 3: Always force state update
                 self.async_update_listeners()
                 return False
             self.device.set_ble_device(ble_device)
             if not await self.device.connect():
                 self._available = False
                 self._was_unavailable = True
-                # ACTION 3: Always force state update
                 self.async_update_listeners()
                 return False
         return True

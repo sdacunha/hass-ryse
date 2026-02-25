@@ -24,5 +24,25 @@
       "no_devices_found": "No RYSE Smart Shades found. Please make sure your device is powered on and in pairing mode, then try again.",
       "failed_to_pair": "Failed to pair with the RYSE device. Please ensure it is in pairing mode and not already paired with another device, then try again."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "RYSE SmartShade Settings",
+        "description": "Adjust connection and polling settings for this device.",
+        "data": {
+          "poll_interval": "Poll interval (seconds)",
+          "idle_disconnect_timeout": "Idle disconnect timeout (seconds)",
+          "connection_timeout": "Connection timeout (seconds)",
+          "max_retry_attempts": "Max connection retry attempts"
+        },
+        "data_description": {
+          "poll_interval": "How often to poll the device via Bluetooth when advertisements stop (60–3600).",
+          "idle_disconnect_timeout": "Disconnect the Bluetooth connection after this many seconds of inactivity to prevent stale connections (10–300).",
+          "connection_timeout": "How long to wait for a Bluetooth connection attempt (5–60).",
+          "max_retry_attempts": "Number of times to retry a failed connection (1–10)."
+        }
+      }
+    }
   }
 }

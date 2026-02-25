@@ -6,8 +6,8 @@ HARDCODED_UUIDS = {
 }
 
 # Connection and polling configuration
-# These can be overridden via config entry options in the future
 DEFAULT_CONNECTION_TIMEOUT = 10  # seconds (initial attempt)
 DEFAULT_MAX_RETRY_ATTEMPTS = 3
 DEFAULT_POLL_INTERVAL = 300  # seconds (5 minutes - rely on advertisements primarily)
 DEFAULT_INIT_TIMEOUT = 30  # seconds (wait for first advertisement)
+DEFAULT_IDLE_DISCONNECT_TIMEOUT = 60  # seconds - disconnect BLE after inactivity

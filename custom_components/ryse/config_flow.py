@@ -9,7 +9,14 @@ from bleak import BleakClient, BleakError
 from bleak_retry_connector import establish_connection
 from homeassistant.components import bluetooth
 from homeassistant.core import callback
-from .const import DOMAIN, HARDCODED_UUIDS
+from .const import (
+    DOMAIN,
+    HARDCODED_UUIDS,
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_IDLE_DISCONNECT_TIMEOUT,
+    DEFAULT_CONNECTION_TIMEOUT,
+    DEFAULT_MAX_RETRY_ATTEMPTS,
+)
 from datetime import datetime
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,6 +27,12 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for RYSE BLE Device."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        """Get the options flow for this handler."""
+        return RyseOptionsFlow(config_entry)
 
     def __init__(self):
         self._discovered_devices = {}
@@ -220,3 +233,41 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._initialized = True
             _LOGGER.debug(f"Updated cover position: {position}")
         self.async_write_ha_state()
+
+
+class RyseOptionsFlow(config_entries.OptionsFlow):
+    """Handle options for RYSE integration."""
+
+    def __init__(self, config_entry):
+        """Initialize options flow."""
+        self.config_entry = config_entry
+
+    async def async_step_init(self, user_input=None):
+        """Manage the options."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        options = self.config_entry.options
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        "poll_interval",
+                        default=options.get("poll_interval", DEFAULT_POLL_INTERVAL),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=60, max=3600)),
+                    vol.Optional(
+                        "idle_disconnect_timeout",
+                        default=options.get("idle_disconnect_timeout", DEFAULT_IDLE_DISCONNECT_TIMEOUT),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=10, max=300)),
+                    vol.Optional(
+                        "connection_timeout",
+                        default=options.get("connection_timeout", DEFAULT_CONNECTION_TIMEOUT),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=5, max=60)),
+                    vol.Optional(
+                        "max_retry_attempts",
+                        default=options.get("max_retry_attempts", DEFAULT_MAX_RETRY_ATTEMPTS),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
+                }
+            ),
+        )

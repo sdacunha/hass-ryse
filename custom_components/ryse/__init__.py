@@ -7,10 +7,25 @@ from homeassistant.core import HomeAssistant
 
 from .ryse import RyseDevice
 from .coordinator import RyseCoordinator
+from .const import (
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_IDLE_DISCONNECT_TIMEOUT,
+    DEFAULT_CONNECTION_TIMEOUT,
+    DEFAULT_MAX_RETRY_ATTEMPTS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "ryse"
+
+
+def _apply_options(device: RyseDevice, options: dict) -> None:
+    """Apply config entry options to the device."""
+    device._poll_interval = options.get("poll_interval", DEFAULT_POLL_INTERVAL)
+    device._idle_disconnect_timeout = options.get("idle_disconnect_timeout", DEFAULT_IDLE_DISCONNECT_TIMEOUT)
+    device._connection_timeout = options.get("connection_timeout", DEFAULT_CONNECTION_TIMEOUT)
+    device._max_retry_attempts = options.get("max_retry_attempts", DEFAULT_MAX_RETRY_ATTEMPTS)
+
 
 async def async_setup(hass: HomeAssistant, config: dict):
     """Set up the RYSE component."""
@@ -20,22 +35,35 @@ async def async_setup(hass: HomeAssistant, config: dict):
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up RYSE from a config entry."""
     _LOGGER.info("Setting up RYSE entry: %s", entry.data)
-    
+
     # Create device instance
     device = RyseDevice(entry.data["address"])
+    _apply_options(device, entry.options)
     _LOGGER.info("[init] Created RyseDevice (id: %s) for address: %s", id(device), entry.data["address"])
-    
+
     # Create coordinator instance
     coordinator = RyseCoordinator(hass, entry.data["address"], device, entry.data.get("name", "SmartShade"))
-    
+
     # Store coordinator in hass data
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
-    
+
+    # Listen for options updates
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
     # Set up platforms
     await hass.config_entries.async_forward_entry_setups(entry, ["cover", "sensor"])
-    
+
     return True
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle options update."""
+    coordinator = hass.data[DOMAIN].get(entry.entry_id)
+    if coordinator:
+        _apply_options(coordinator.device, entry.options)
+        _LOGGER.info("Updated RYSE options for %s: %s", entry.data.get("name"), entry.options)
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
@@ -48,8 +76,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Clean up coordinator and device
         coordinator = hass.data[DOMAIN].pop(entry.entry_id)
         # Disconnect the device if connected
-        if coordinator.device.client and coordinator.device.client.is_connected:
-            await coordinator.device.disconnect()
-            _LOGGER.debug("Disconnected device during unload: %s", entry.data["address"])
+        await coordinator.device.disconnect()
+        _LOGGER.debug("Disconnected device during unload: %s", entry.data["address"])
 
     return unload_ok
