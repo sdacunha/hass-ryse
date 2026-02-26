@@ -9,6 +9,8 @@ from .const import (
     DEFAULT_CONNECTION_TIMEOUT,
     DEFAULT_MAX_RETRY_ATTEMPTS,
     DEFAULT_POLL_INTERVAL,
+    DEFAULT_ACTIVE_MODE,
+    DEFAULT_ACTIVE_RECONNECT_DELAY,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,11 +33,14 @@ class RyseDevice:
         self._connection_lock = asyncio.Lock()
         self._connecting = False
         self._idle_timer = None
+        self._disconnect_callbacks = []
         # Configurable timeouts (can be updated from config entry options)
         self._connection_timeout = DEFAULT_CONNECTION_TIMEOUT
         self._max_retry_attempts = DEFAULT_MAX_RETRY_ATTEMPTS
         self._poll_interval = DEFAULT_POLL_INTERVAL
         self._idle_disconnect_timeout = DEFAULT_IDLE_DISCONNECT_TIMEOUT
+        self._active_mode = DEFAULT_ACTIVE_MODE
+        self._active_reconnect_delay = DEFAULT_ACTIVE_RECONNECT_DELAY
 
     def add_battery_callback(self, callback):
         """Add a callback for battery updates."""
@@ -48,6 +53,10 @@ class RyseDevice:
     def add_adv_callback(self, callback):
         """Add a callback for advertisement updates."""
         self._adv_callbacks.append(callback)
+
+    def add_disconnect_callback(self, callback):
+        """Add a callback for unexpected disconnections."""
+        self._disconnect_callbacks.append(callback)
 
     def get_battery_level(self) -> int | None:
         """Get the latest battery level."""
@@ -62,9 +71,13 @@ class RyseDevice:
         self._is_connected = False
         self._connecting = False
         self._cancel_idle_timer()
+        for cb in self._disconnect_callbacks:
+            cb()
 
     def _schedule_idle_disconnect(self):
         """Reset the idle disconnect timer. Disconnects after inactivity to prevent stale connections."""
+        if self._active_mode:
+            return  # Active mode: keep connection alive
         self._cancel_idle_timer()
         try:
             loop = asyncio.get_running_loop()

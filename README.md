@@ -36,6 +36,21 @@ The tree in your Home Assistant should look like this:
 
 Reboot your Home Assistant instance and you can now pair your RYSE SmartShades.
 
+## Configuration
+
+After pairing a device, click **Configure** on the integration entry to adjust settings per device.
+
+| Setting | Default | Description |
+| ------- | ------- | ----------- |
+| **Active mode** | Off | Maintain a persistent Bluetooth connection and auto-reconnect on disconnect. Recommended for plugged-in blinds. Not recommended for battery-powered blinds as it will drain the battery. |
+| **Poll interval** | 300s | How often to poll the device via Bluetooth when advertisements stop (60–3600s). |
+| **Idle disconnect timeout** | 60s | Disconnect the Bluetooth connection after this many seconds of inactivity (10–300s). Ignored when active mode is enabled. |
+| **Connection timeout** | 10s | How long to wait for a Bluetooth connection attempt (5–60s). |
+| **Max retry attempts** | 3 | Number of times to retry a failed connection (1–10). |
+| **Active reconnect delay** | 5s | Seconds to wait before reconnecting after an unexpected disconnect in active mode (1–30s). |
+
+Settings take effect immediately without restarting Home Assistant.
+
 ## Support & Feedback
 If you have questions, suggestions, or want to contribute, please open an issue or pull request on GitHub! My time is limited, so I will do my best to respond to issues and pull requests, I mostly created this integration for my own use.
 

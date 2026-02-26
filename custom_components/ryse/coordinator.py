@@ -38,8 +38,13 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         self._adv_cancel = bluetooth.async_register_callback(
             hass, self._handle_adv, {"address": address}, bluetooth.BluetoothScanningMode.ACTIVE
         )
+        self._reconnect_task = None
+        self.device.add_disconnect_callback(self._handle_device_disconnected)
         # Start the initialization timer
         self.hass.async_create_task(self._async_init_timeout())
+        # In active mode, establish connection on startup
+        if self.device._active_mode:
+            self.hass.async_create_task(self._active_reconnect())
 
     async def _async_init_timeout(self):
         await asyncio.sleep(DEFAULT_INIT_TIMEOUT)
@@ -102,6 +107,39 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         self._available = False
         self._was_unavailable = True
         self.async_update_listeners()
+
+    @callback
+    def _handle_device_disconnected(self):
+        """Handle unexpected BLE disconnection from the device."""
+        if not self.device._active_mode:
+            return
+        # Avoid stacking reconnect tasks
+        if self._reconnect_task and not self._reconnect_task.done():
+            return
+        _LOGGER.info(f"[Coordinator] Active mode: scheduling reconnect for {self._name}")
+        self._reconnect_task = self.hass.async_create_task(self._active_reconnect())
+
+    async def _active_reconnect(self):
+        """Reconnect in active mode after unexpected disconnect."""
+        for attempt in range(self.device._max_retry_attempts):
+            await asyncio.sleep(self.device._active_reconnect_delay)
+            ble_device = bluetooth.async_ble_device_from_address(
+                self.hass, self.address, connectable=True
+            )
+            if not ble_device:
+                _LOGGER.debug(
+                    "[Coordinator] Active reconnect attempt %d: no BLE device for %s",
+                    attempt + 1, self._name,
+                )
+                continue
+            self.device.set_ble_device(ble_device)
+            if await self.device.connect():
+                _LOGGER.info(f"[Coordinator] Active mode reconnected to {self._name}")
+                return
+        _LOGGER.warning(
+            "[Coordinator] Active mode reconnect failed for %s after %d attempts",
+            self._name, self.device._max_retry_attempts,
+        )
 
     @callback
     def _needs_poll(self, service_info, seconds_since_last_poll):

@@ -16,6 +16,8 @@ from .const import (
     DEFAULT_IDLE_DISCONNECT_TIMEOUT,
     DEFAULT_CONNECTION_TIMEOUT,
     DEFAULT_MAX_RETRY_ATTEMPTS,
+    DEFAULT_ACTIVE_MODE,
+    DEFAULT_ACTIVE_RECONNECT_DELAY,
 )
 from datetime import datetime
 
@@ -249,6 +251,10 @@ class RyseOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Optional(
+                        "active_mode",
+                        default=options.get("active_mode", DEFAULT_ACTIVE_MODE),
+                    ): bool,
+                    vol.Optional(
                         "poll_interval",
                         default=options.get("poll_interval", DEFAULT_POLL_INTERVAL),
                     ): vol.All(vol.Coerce(int), vol.Range(min=60, max=3600)),
@@ -264,6 +270,10 @@ class RyseOptionsFlow(config_entries.OptionsFlow):
                         "max_retry_attempts",
                         default=options.get("max_retry_attempts", DEFAULT_MAX_RETRY_ATTEMPTS),
                     ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
+                    vol.Optional(
+                        "active_reconnect_delay",
+                        default=options.get("active_reconnect_delay", DEFAULT_ACTIVE_RECONNECT_DELAY),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=30)),
                 }
             ),
         )

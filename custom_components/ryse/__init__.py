@@ -12,6 +12,8 @@ from .const import (
     DEFAULT_IDLE_DISCONNECT_TIMEOUT,
     DEFAULT_CONNECTION_TIMEOUT,
     DEFAULT_MAX_RETRY_ATTEMPTS,
+    DEFAULT_ACTIVE_MODE,
+    DEFAULT_ACTIVE_RECONNECT_DELAY,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,6 +27,8 @@ def _apply_options(device: RyseDevice, options: dict) -> None:
     device._idle_disconnect_timeout = options.get("idle_disconnect_timeout", DEFAULT_IDLE_DISCONNECT_TIMEOUT)
     device._connection_timeout = options.get("connection_timeout", DEFAULT_CONNECTION_TIMEOUT)
     device._max_retry_attempts = options.get("max_retry_attempts", DEFAULT_MAX_RETRY_ATTEMPTS)
+    device._active_mode = options.get("active_mode", DEFAULT_ACTIVE_MODE)
+    device._active_reconnect_delay = options.get("active_reconnect_delay", DEFAULT_ACTIVE_RECONNECT_DELAY)
 
 
 async def async_setup(hass: HomeAssistant, config: dict):
@@ -61,8 +65,15 @@ async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> Non
     """Handle options update."""
     coordinator = hass.data[DOMAIN].get(entry.entry_id)
     if coordinator:
+        was_active = coordinator.device._active_mode
         _apply_options(coordinator.device, entry.options)
         _LOGGER.info("Updated RYSE options for %s: %s", entry.data.get("name"), entry.options)
+        # If active mode was just enabled, establish connection
+        if coordinator.device._active_mode and not was_active:
+            hass.async_create_task(coordinator._active_reconnect())
+        # If active mode was just disabled, let idle timer handle disconnect
+        elif was_active and not coordinator.device._active_mode:
+            coordinator.device._schedule_idle_disconnect()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
