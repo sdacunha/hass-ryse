@@ -237,6 +237,11 @@ class RyseDevice:
                 list(data),
                 data.hex(),
             )
+            # Only use the RYSE manufacturer ID (0x0409). Other entries
+            # (e.g. 0x2082) contain unrelated data that was overwriting
+            # the correct position/battery values.
+            if mfr_id not in (0x0409, 0x409):
+                continue
             if len(data) >= 3:
                 result['position'] = data[1]
                 result['battery'] = data[2]
