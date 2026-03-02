@@ -122,6 +122,10 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if not address:
             return self.async_abort(reason="no_device_selected")
 
+        # Set unique ID so HA knows this config entry owns this address
+        await self.async_set_unique_id(address)
+        self._abort_if_unique_id_configured()
+
         _LOGGER.info(f"Attempting to connect to RYSE device at address: {address}")
         try:
             # Get BLEDevice from Home Assistant (supports Bluetooth proxies)
@@ -190,10 +194,10 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_bluetooth(self, discovery_info):
         """Handle a flow initialized by bluetooth discovery."""
         address = getattr(discovery_info, "address", None)
-        # Check if this address is already configured
-        existing_entries = self.hass.config_entries.async_entries(DOMAIN)
-        if any(entry.data.get("address") == address for entry in existing_entries):
-            return self.async_abort(reason="already_configured")
+        # Deduplicate: set unique ID by address so HA collapses multiple
+        # discovery flows (from different proxies/adapters) into one.
+        await self.async_set_unique_id(address)
+        self._abort_if_unique_id_configured()
         name = getattr(discovery_info, "name", "RYSE SmartShade")
         display_name = f"{name} ({address})"
         self._discovered_devices[address] = display_name
@@ -274,6 +278,10 @@ class RyseOptionsFlow(config_entries.OptionsFlow):
                         "active_reconnect_delay",
                         default=options.get("active_reconnect_delay", DEFAULT_ACTIVE_RECONNECT_DELAY),
                     ): vol.All(vol.Coerce(int), vol.Range(min=1, max=30)),
+                    vol.Optional(
+                        "disable_battery_sensor",
+                        default=options.get("disable_battery_sensor", False),
+                    ): bool,
                 }
             ),
         )

@@ -230,6 +230,13 @@ class RyseDevice:
     def parse_advertisement(service_info) -> dict:
         result = {}
         for mfr_id, data in getattr(service_info, 'manufacturer_data', {}).items():
+            _LOGGER.debug(
+                "[ADV] %s mfr_id=0x%04X raw=%s (hex=%s)",
+                getattr(service_info, 'address', '?'),
+                mfr_id,
+                list(data),
+                data.hex(),
+            )
             if len(data) >= 3:
                 result['position'] = data[1]
                 result['battery'] = data[2]

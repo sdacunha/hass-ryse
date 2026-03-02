@@ -47,10 +47,14 @@ class RyseBatterySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
 
     @property
     def available(self):
+        if self._entry.options.get("disable_battery_sensor", False):
+            return False
         return self._coordinator.available and not self._coordinator.initializing
 
     @property
     def native_value(self):
+        if self._entry.options.get("disable_battery_sensor", False):
+            return None
         if self._coordinator.initializing:
             return None
         return self._coordinator.battery

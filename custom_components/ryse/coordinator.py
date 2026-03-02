@@ -189,7 +189,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             return
         try:
             data = await self.device.read_gatt(HARDCODED_UUIDS["rx_uuid"])
-            _LOGGER.debug("[Coordinator] GATT poll data for %s: %s", self._name, data)
+            _LOGGER.debug("[Coordinator] GATT poll data for %s: raw=%s (hex=%s)", self._name, list(data) if data else None, data.hex() if data else None)
             if len(data) >= 3:
                 self._position = data[1]
                 self._battery = data[2]
