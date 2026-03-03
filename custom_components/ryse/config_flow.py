@@ -56,9 +56,15 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_scan(self, user_input=None):
-        # Exclude already configured devices
+        # Exclude already configured devices (by address in data AND by unique_id)
         existing_entries = self.hass.config_entries.async_entries(DOMAIN)
-        existing_addresses = {entry.data["address"].upper() for entry in existing_entries if "address" in entry.data}
+        existing_addresses = set()
+        for entry in existing_entries:
+            if "address" in entry.data:
+                existing_addresses.add(entry.data["address"].upper())
+            if entry.unique_id:
+                existing_addresses.add(entry.unique_id.upper())
+        _LOGGER.debug("[ConfigFlow] Excluding addresses: %s", existing_addresses)
         self._update_discovered_devices(existing_addresses)
         errors = {}
         selected_label = None
@@ -102,6 +108,7 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         exclude_addresses = exclude_addresses or set()
         for info in async_discovered_service_info(self.hass):
             if info.address.upper() in exclude_addresses:
+                _LOGGER.debug("[ConfigFlow] Excluding already-configured device: %s", info.address)
                 continue
             is_ryse = (
                 (info.name and info.name.startswith("RZSS")) or
