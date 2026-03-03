@@ -1,6 +1,7 @@
 from homeassistant.components.cover import CoverEntity, CoverEntityFeature
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 import logging
@@ -56,6 +57,7 @@ class SmartShadeCover(CoordinatorEntity, CoverEntity, RestoreEntity):
     def device_info(self):
         return DeviceInfo(
             identifiers={(DOMAIN, self._coordinator.device.address)},
+            connections={(dr.CONNECTION_BLUETOOTH, self._coordinator.device.address)},
             name=self._attr_name,
             manufacturer="RYSE Inc.",
             model="SmartShade",

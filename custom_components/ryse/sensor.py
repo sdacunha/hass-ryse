@@ -63,6 +63,7 @@ class RyseBatterySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
     def device_info(self):
         return DeviceInfo(
             identifiers={(DOMAIN, self._coordinator.device.address)},
+            connections={(dr.CONNECTION_BLUETOOTH, self._coordinator.device.address)},
             name=self._attr_name,
             manufacturer="RYSE Inc.",
             model="SmartShade",
