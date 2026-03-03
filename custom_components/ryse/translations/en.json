@@ -17,6 +17,28 @@
       "name": {
         "title": "Name Your SmartShade",
         "description": "Enter a name for your SmartShade."
+      },
+      "settings": {
+        "title": "Configure SmartShade",
+        "description": "Configure settings for your SmartShade. You can change these later from the integration options.",
+        "data": {
+          "active_mode": "Active mode (persistent connection)",
+          "poll_interval": "Poll interval (seconds)",
+          "idle_disconnect_timeout": "Idle disconnect timeout (seconds)",
+          "connection_timeout": "Connection timeout (seconds)",
+          "max_retry_attempts": "Max connection retry attempts",
+          "active_reconnect_delay": "Active mode reconnect delay (seconds)",
+          "disable_battery_sensor": "Disable battery sensor"
+        },
+        "data_description": {
+          "active_mode": "Keep a persistent Bluetooth connection and auto-reconnect on disconnect. Recommended for plugged-in blinds. Not recommended for battery-powered blinds.",
+          "poll_interval": "How often to poll the device via Bluetooth when advertisements stop (60–3600).",
+          "idle_disconnect_timeout": "Disconnect the Bluetooth connection after this many seconds of inactivity to prevent stale connections (10–300). Ignored in active mode.",
+          "connection_timeout": "How long to wait for a Bluetooth connection attempt (5–60).",
+          "max_retry_attempts": "Number of times to retry a failed connection (1–10).",
+          "active_reconnect_delay": "Seconds to wait before reconnecting after an unexpected disconnect in active mode (1–30).",
+          "disable_battery_sensor": "Hide the battery sensor for this device. Useful for plugged-in blinds that report unreliable battery values."
+        }
       }
     },
     "error": {

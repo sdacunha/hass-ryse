@@ -58,7 +58,7 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_scan(self, user_input=None):
         # Exclude already configured devices
         existing_entries = self.hass.config_entries.async_entries(DOMAIN)
-        existing_addresses = {entry.data["address"] for entry in existing_entries if "address" in entry.data}
+        existing_addresses = {entry.data["address"].upper() for entry in existing_entries if "address" in entry.data}
         self._update_discovered_devices(existing_addresses)
         errors = {}
         selected_label = None
@@ -101,7 +101,7 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered_devices = {}
         exclude_addresses = exclude_addresses or set()
         for info in async_discovered_service_info(self.hass):
-            if info.address in exclude_addresses:
+            if info.address.upper() in exclude_addresses:
                 continue
             is_ryse = (
                 (info.name and info.name.startswith("RZSS")) or
@@ -177,18 +177,58 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not name or not name.strip():
                 errors["name"] = "Name required"
             else:
-                # Save the name and create the entry
-                data = dict(self._pending_entry_data)
-                data["name"] = name.strip()
-                return self.async_create_entry(
-                    title=name.strip(),
-                    data=data,
-                )
+                self._pending_entry_data["name"] = name.strip()
+                return await self.async_step_settings()
         return self.async_show_form(
             step_id="name",
             data_schema=vol.Schema({vol.Required("name"): str}),
             description_placeholders={"info": "Enter a name for your SmartShade."},
             errors=errors,
+        )
+
+    async def async_step_settings(self, user_input=None):
+        if user_input is not None:
+            data = dict(self._pending_entry_data)
+            name = data["name"]
+            return self.async_create_entry(
+                title=name,
+                data=data,
+                options=user_input,
+            )
+        return self.async_show_form(
+            step_id="settings",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        "active_mode",
+                        default=DEFAULT_ACTIVE_MODE,
+                    ): bool,
+                    vol.Optional(
+                        "poll_interval",
+                        default=DEFAULT_POLL_INTERVAL,
+                    ): vol.All(vol.Coerce(int), vol.Range(min=60, max=3600)),
+                    vol.Optional(
+                        "idle_disconnect_timeout",
+                        default=DEFAULT_IDLE_DISCONNECT_TIMEOUT,
+                    ): vol.All(vol.Coerce(int), vol.Range(min=10, max=300)),
+                    vol.Optional(
+                        "connection_timeout",
+                        default=DEFAULT_CONNECTION_TIMEOUT,
+                    ): vol.All(vol.Coerce(int), vol.Range(min=5, max=60)),
+                    vol.Optional(
+                        "max_retry_attempts",
+                        default=DEFAULT_MAX_RETRY_ATTEMPTS,
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
+                    vol.Optional(
+                        "active_reconnect_delay",
+                        default=DEFAULT_ACTIVE_RECONNECT_DELAY,
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=30)),
+                    vol.Optional(
+                        "disable_battery_sensor",
+                        default=False,
+                    ): bool,
+                }
+            ),
         )
 
     async def async_step_bluetooth(self, discovery_info):
