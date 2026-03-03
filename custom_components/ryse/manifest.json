@@ -2,12 +2,20 @@
   "domain": "ryse",
   "name": "RYSE SmartShade",
   "description": "RYSE SmartShade Bluetooth integration for Home Assistant",
-  "version": "1.0.27",
+  "version": "1.0.28",
   "documentation": "https://github.com/sdacunha/ryse",
-  "dependencies": ["bluetooth", "bluetooth_adapters"],
+  "dependencies": [
+    "bluetooth",
+    "bluetooth_adapters"
+  ],
   "integration_type": "device",
-  "codeowners": ["@sdacunha"],
-  "requirements": ["bleak>=0.20.0", "bleak-retry-connector>=3.0.0"],
+  "codeowners": [
+    "@sdacunha"
+  ],
+  "requirements": [
+    "bleak>=0.20.0",
+    "bleak-retry-connector>=3.0.0"
+  ],
   "iot_class": "local_push",
   "config_flow": true,
   "bluetooth": [
@@ -16,6 +24,11 @@
       "manufacturer_id": 1033
     }
   ],
-  "supported_platforms": ["cover", "sensor"],
-  "loggers": ["custom_components.ryse"]
+  "supported_platforms": [
+    "cover",
+    "sensor"
+  ],
+  "loggers": [
+    "custom_components.ryse"
+  ]
 }
