@@ -9,10 +9,14 @@
       },
       "scan": {
         "title": "Select RYSE SmartShade",
-        "description": "{info}",
+        "description": "Press the button on your RYSE SmartShade to put it in pairing mode, then select it below and click Submit. Devices in pairing mode are marked. If you don't see your device, press the button and click Submit again to refresh.",
         "data": {
-          "device_address": "Devices"
+          "device_address": "Device"
         }
+      },
+      "bluetooth_confirm": {
+        "title": "RYSE SmartShade Discovered",
+        "description": "Found {name}. Click Submit to pair."
       },
       "name": {
         "title": "Name Your SmartShade",

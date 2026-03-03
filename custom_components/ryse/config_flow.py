@@ -1,14 +1,21 @@
+from __future__ import annotations
+
+from typing import Any
+
 from homeassistant import config_entries
-import voluptuous as vol
-import logging
 from homeassistant.components.bluetooth import (
+    BluetoothServiceInfoBleak,
     async_ble_device_from_address,
     async_discovered_service_info,
 )
-from bleak import BleakClient, BleakError
-from bleak_retry_connector import establish_connection
-from homeassistant.components import bluetooth
+from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.core import callback
+import voluptuous as vol
+import logging
+
+from bleak import BleakClient
+from bleak_retry_connector import establish_connection
+
 from .const import (
     DOMAIN,
     HARDCODED_UUIDS,
@@ -19,26 +26,48 @@ from .const import (
     DEFAULT_ACTIVE_MODE,
     DEFAULT_ACTIVE_RECONNECT_DELAY,
 )
-from datetime import datetime
 
 _LOGGER = logging.getLogger(__name__)
 
+# Manufacturer ID registered to RYSE Inc. with the Bluetooth SIG
+RYSE_MANUFACTURER_ID = 0x0409
 
-def _mac_bit_distance(mac_a: str, mac_b: str) -> int:
-    """Return the number of differing bits between two MAC addresses.
 
-    ESPHome Bluetooth proxies occasionally report MAC addresses with
-    single-bit corruptions.  Comparing at the bit level lets us detect
-    these phantom duplicates and suppress them.
+def _is_ryse_device(service_info) -> bool:
+    """Return True if the service_info belongs to a RYSE SmartShade.
+
+    Requires BOTH the RZSS name prefix AND the RYSE manufacturer ID.
     """
-    try:
-        bytes_a = bytes.fromhex(mac_a.replace(":", "").replace("-", ""))
-        bytes_b = bytes.fromhex(mac_b.replace(":", "").replace("-", ""))
-    except (ValueError, AttributeError):
-        return 999  # unparseable → treat as different
-    return sum(bin(a ^ b).count("1") for a, b in zip(bytes_a, bytes_b))
+    has_name = bool(
+        getattr(service_info, "name", None)
+        and service_info.name.startswith("RZSS")
+    )
+    has_mfr = RYSE_MANUFACTURER_ID in getattr(service_info, "manufacturer_data", {})
+    return has_name and has_mfr
 
-PAIRING_MODE_FLAG = 0x01  # LE Limited Discoverable Mode (standard pairing mode)
+
+SETTINGS_SCHEMA = vol.Schema(
+    {
+        vol.Optional("active_mode", default=DEFAULT_ACTIVE_MODE): bool,
+        vol.Optional("poll_interval", default=DEFAULT_POLL_INTERVAL): vol.All(
+            vol.Coerce(int), vol.Range(min=60, max=3600)
+        ),
+        vol.Optional(
+            "idle_disconnect_timeout", default=DEFAULT_IDLE_DISCONNECT_TIMEOUT
+        ): vol.All(vol.Coerce(int), vol.Range(min=10, max=300)),
+        vol.Optional(
+            "connection_timeout", default=DEFAULT_CONNECTION_TIMEOUT
+        ): vol.All(vol.Coerce(int), vol.Range(min=5, max=60)),
+        vol.Optional(
+            "max_retry_attempts", default=DEFAULT_MAX_RETRY_ATTEMPTS
+        ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
+        vol.Optional(
+            "active_reconnect_delay", default=DEFAULT_ACTIVE_RECONNECT_DELAY
+        ): vol.All(vol.Coerce(int), vol.Range(min=1, max=30)),
+        vol.Optional("disable_battery_sensor", default=False): bool,
+    }
+)
+
 
 class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for RYSE BLE Device."""
@@ -48,154 +77,173 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
-        """Get the options flow for this handler."""
         return RyseOptionsFlow()
 
     def __init__(self):
-        self._discovered_devices = {}
-        self._selected_device = None
-        self._scan_task = None
-        self._scan_timeout = 30  # seconds
+        self._discovered_devices: dict[str, dict] = {}
+        self._selected_device: str | None = None
+        self._discovery_info: BluetoothServiceInfoBleak | None = None
+        self._pending_entry_data: dict[str, Any] = {}
 
-    async def async_step_user(self, user_input=None):
+    # ------------------------------------------------------------------
+    # Manual flow: user → scan → pair → name → settings
+    # ------------------------------------------------------------------
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         if user_input is not None:
-            if user_input.get("cancel"):
-                return self.async_abort(reason="user_cancelled")
             return await self.async_step_scan()
-        return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema({}),
-            description_placeholders={"info": "Put your RYSE device in pairing mode (press and hold the PAIR button) and click Next to continue."},
-            last_step=False,
-            errors={},
-        )
+        return self.async_show_form(step_id="user", data_schema=vol.Schema({}))
 
-    async def async_step_scan(self, user_input=None):
-        # Exclude already configured devices (by address in data AND by unique_id)
-        existing_entries = self.hass.config_entries.async_entries(DOMAIN)
-        existing_addresses = set()
-        for entry in existing_entries:
+    async def async_step_scan(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        existing = self.hass.config_entries.async_entries(DOMAIN)
+        exclude = set()
+        for entry in existing:
             if "address" in entry.data:
-                existing_addresses.add(entry.data["address"].upper())
+                exclude.add(entry.data["address"].upper())
             if entry.unique_id:
-                existing_addresses.add(entry.unique_id.upper())
-        _LOGGER.debug("[ConfigFlow] Excluding addresses: %s", existing_addresses)
-        self._update_discovered_devices(existing_addresses)
-        errors = {}
-        selected_label = None
+                exclude.add(entry.unique_id.upper())
+
+        self._refresh_discovered_devices(exclude)
+
+        errors: dict[str, str] = {}
         if user_input is not None:
-            if user_input.get("cancel"):
-                return self.async_abort(reason="user_cancelled")
             address = user_input.get("device_address")
             if not address or address not in self._discovered_devices:
-                errors["base"] = "invalid_device"
+                errors["base"] = "no_devices_found"
             else:
-                in_pairing = self._discovered_devices[address]["in_pairing"]
-                selected_label = self._discovered_devices[address]["label"]
-                if not in_pairing:
+                dev = self._discovered_devices[address]
+                if not dev["in_pairing"]:
                     errors["base"] = "not_in_pairing_mode"
                 else:
                     self._selected_device = address
                     return await self.async_step_pair()
+
         device_options = {
-            addr: f"{info['label']}" for addr, info in self._discovered_devices.items()
+            addr: info["label"]
+            for addr, info in self._discovered_devices.items()
         }
-        data_schema = vol.Schema({
-            vol.Required("device_address", description={"suggested_value": None, "translation_key": "device_address"}): vol.In(device_options)
-        }) if device_options else vol.Schema({})
-        description = (
-            "Press the button on your RYSE SmartShade to put it in pairing mode, then select it below and click Pair. "
-            "Devices in pairing mode are marked. If you don't see your device in pairing mode, press the button and click Pair again to refresh the list."
-        )
-        # Set the dynamic title using title_placeholders
-        dynamic_title = selected_label or "RYSE SmartShade"
-        self.context["title_placeholders"] = {"name": dynamic_title}
+
+        if device_options:
+            data_schema = vol.Schema(
+                {vol.Required("device_address"): vol.In(device_options)}
+            )
+        else:
+            data_schema = vol.Schema({})
+
         return self.async_show_form(
             step_id="scan",
             data_schema=data_schema,
-            description_placeholders={"info": description},
-            errors=errors
+            errors=errors,
         )
 
-    def _update_discovered_devices(self, exclude_addresses=None):
-        # Only include RYSE devices in the list, excluding already configured ones
+    def _refresh_discovered_devices(self, exclude_addresses: set) -> None:
+        """Populate self._discovered_devices with currently visible RYSE devices."""
         self._discovered_devices = {}
-        exclude_addresses = exclude_addresses or set()
         for info in async_discovered_service_info(self.hass):
             addr_upper = info.address.upper()
+
+            # Skip already configured
             if addr_upper in exclude_addresses:
-                _LOGGER.debug("[ConfigFlow] Excluding already-configured device: %s", info.address)
                 continue
-            # Suppress phantom devices caused by ESPHome proxy MAC corruption
-            # (single-bit flips). If the address is within 2 bits of a configured
-            # address, treat it as a corrupted duplicate.
-            is_phantom = any(
-                _mac_bit_distance(addr_upper, known) <= 2
-                for known in exclude_addresses
-            )
-            if is_phantom:
-                _LOGGER.debug("[ConfigFlow] Excluding phantom device (bit-flip): %s", info.address)
+
+            # Require BOTH RZSS name AND RYSE manufacturer ID
+            if not _is_ryse_device(info):
                 continue
-            is_ryse = (
-                (info.name and info.name.startswith("RZSS")) or
-                (0x0409 in info.manufacturer_data or 0x409 in info.manufacturer_data)
-            )
-            if not is_ryse:
-                continue
-            mfr_data = info.manufacturer_data
-            raw_data = mfr_data.get(0x0409) or mfr_data.get(0x409)
-            in_pairing = bool(raw_data and (raw_data[0] & 0x40))
+
+            mfr_data = info.manufacturer_data.get(RYSE_MANUFACTURER_ID)
+            in_pairing = bool(mfr_data and len(mfr_data) >= 1 and (mfr_data[0] & 0x40))
+
             label = f"{info.name} ({info.address})"
             if in_pairing:
                 label += " [Pairing mode]"
-            self._discovered_devices[info.address] = {"label": label, "in_pairing": in_pairing}
 
-    async def async_step_pair(self, user_input=None):
+            self._discovered_devices[info.address] = {
+                "label": label,
+                "in_pairing": in_pairing,
+            }
+
+    # ------------------------------------------------------------------
+    # Bluetooth auto-discovery: bluetooth → bluetooth_confirm → pair → …
+    # ------------------------------------------------------------------
+
+    async def async_step_bluetooth(
+        self, discovery_info: BluetoothServiceInfoBleak
+    ) -> ConfigFlowResult:
+        """Handle a flow initialized by bluetooth discovery."""
+        await self.async_set_unique_id(discovery_info.address)
+        self._abort_if_unique_id_configured()
+
+        # Validate this is actually a RYSE device
+        if not _is_ryse_device(discovery_info):
+            return self.async_abort(reason="not_supported")
+
+        self._discovery_info = discovery_info
+        title = f"{discovery_info.name} ({discovery_info.address})"
+        self.context["title_placeholders"] = {"name": title}
+        return await self.async_step_bluetooth_confirm()
+
+    async def async_step_bluetooth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm the discovered device before pairing."""
+        if user_input is not None:
+            self._selected_device = self._discovery_info.address
+            return await self.async_step_pair()
+
+        self._set_confirm_only()
+        return self.async_show_form(
+            step_id="bluetooth_confirm",
+            description_placeholders=self.context.get("title_placeholders", {}),
+        )
+
+    # ------------------------------------------------------------------
+    # Shared steps: pair → name → settings → create entry
+    # ------------------------------------------------------------------
+
+    async def async_step_pair(self, user_input=None) -> ConfigFlowResult:
         address = self._selected_device
         if not address:
             return self.async_abort(reason="no_device_selected")
 
-        # Set unique ID so HA knows this config entry owns this address
         await self.async_set_unique_id(address)
         self._abort_if_unique_id_configured()
 
-        _LOGGER.info(f"Attempting to connect to RYSE device at address: {address}")
+        _LOGGER.info("Attempting to connect to RYSE device at %s", address)
         try:
-            # Get BLEDevice from Home Assistant (supports Bluetooth proxies)
             ble_device = async_ble_device_from_address(self.hass, address)
             if not ble_device:
-                _LOGGER.error(f"Device not found at address: {address}")
+                _LOGGER.error("Device not found at address: %s", address)
                 return self.async_abort(reason="device_not_found")
 
-            # Connect using establish_connection for reliability with proxies
             client = await establish_connection(
-                BleakClient,
-                ble_device,
-                address,
-                max_attempts=3,
+                BleakClient, ble_device, address, max_attempts=3
             )
 
             if not client.is_connected:
-                _LOGGER.error(f"Failed to connect to device: {address}")
+                _LOGGER.error("Failed to connect to device: %s", address)
                 return self.async_abort(reason="cannot_connect")
 
-            _LOGGER.info(f"Connected to device: {address}")
+            _LOGGER.info("Connected to device: %s", address)
 
-            # Verify we can communicate by subscribing to notifications (like original ryseble)
             try:
                 await client.start_notify(HARDCODED_UUIDS["rx_uuid"], lambda s, d: None)
                 await client.stop_notify(HARDCODED_UUIDS["rx_uuid"])
-                _LOGGER.info(f"Verified communication with device: {address}")
+                _LOGGER.info("Verified communication with device: %s", address)
             except Exception as e:
-                _LOGGER.warning(f"Could not verify notifications for {address}: {e}, proceeding anyway")
+                _LOGGER.warning(
+                    "Could not verify notifications for %s: %s, proceeding anyway",
+                    address, e,
+                )
 
             await client.disconnect()
-            _LOGGER.info(f"Disconnected from device: {address}")
         except Exception as e:
-            _LOGGER.error(f"Failed to pair with RYSE device {address}: {e}")
+            _LOGGER.error("Failed to pair with RYSE device %s: %s", address, e)
             return self.async_abort(reason="pairing_failed")
 
-        # Proceed to naming step
         self._pending_entry_data = {
             "address": address,
             "rx_uuid": HARDCODED_UUIDS["rx_uuid"],
@@ -203,8 +251,10 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         }
         return await self.async_step_name()
 
-    async def async_step_name(self, user_input=None):
-        errors = {}
+    async def async_step_name(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
             name = user_input.get("name")
             if not name or not name.strip():
@@ -215,120 +265,26 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="name",
             data_schema=vol.Schema({vol.Required("name"): str}),
-            description_placeholders={"info": "Enter a name for your SmartShade."},
             errors=errors,
         )
 
-    async def async_step_settings(self, user_input=None):
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         if user_input is not None:
             data = dict(self._pending_entry_data)
-            name = data["name"]
             return self.async_create_entry(
-                title=name,
+                title=data["name"],
                 data=data,
                 options=user_input,
             )
-        return self.async_show_form(
-            step_id="settings",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        "active_mode",
-                        default=DEFAULT_ACTIVE_MODE,
-                    ): bool,
-                    vol.Optional(
-                        "poll_interval",
-                        default=DEFAULT_POLL_INTERVAL,
-                    ): vol.All(vol.Coerce(int), vol.Range(min=60, max=3600)),
-                    vol.Optional(
-                        "idle_disconnect_timeout",
-                        default=DEFAULT_IDLE_DISCONNECT_TIMEOUT,
-                    ): vol.All(vol.Coerce(int), vol.Range(min=10, max=300)),
-                    vol.Optional(
-                        "connection_timeout",
-                        default=DEFAULT_CONNECTION_TIMEOUT,
-                    ): vol.All(vol.Coerce(int), vol.Range(min=5, max=60)),
-                    vol.Optional(
-                        "max_retry_attempts",
-                        default=DEFAULT_MAX_RETRY_ATTEMPTS,
-                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
-                    vol.Optional(
-                        "active_reconnect_delay",
-                        default=DEFAULT_ACTIVE_RECONNECT_DELAY,
-                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=30)),
-                    vol.Optional(
-                        "disable_battery_sensor",
-                        default=False,
-                    ): bool,
-                }
-            ),
-        )
-
-    async def async_step_bluetooth(self, discovery_info):
-        """Handle a flow initialized by bluetooth discovery."""
-        address = getattr(discovery_info, "address", None)
-        # Deduplicate: set unique ID by address so HA collapses multiple
-        # discovery flows (from different proxies/adapters) into one.
-        await self.async_set_unique_id(address)
-        self._abort_if_unique_id_configured()
-
-        # Suppress phantom devices from ESPHome proxy MAC corruption (bit flips)
-        for entry in self.hass.config_entries.async_entries(DOMAIN):
-            known = entry.data.get("address", "")
-            if known and _mac_bit_distance(address, known) <= 2:
-                _LOGGER.debug(
-                    "[ConfigFlow] Aborting bluetooth discovery for phantom device %s (near %s)",
-                    address, known,
-                )
-                return self.async_abort(reason="already_configured")
-        name = getattr(discovery_info, "name", "RYSE SmartShade")
-        display_name = f"{name} ({address})"
-        self._discovered_devices[address] = display_name
-        # Set the dynamic title using title_placeholders
-        self.context["title_placeholders"] = {"name": display_name}
-        return self.async_show_form(
-            step_id="scan",
-            data_schema=vol.Schema({}),
-            description_placeholders={"info": f"RYSE SmartShade {display_name} found. Press Next to pair."},
-            errors={}
-        )
-
-    async def async_step_abort(self, user_input=None):
-        """Handle aborting the config flow."""
-        if hasattr(self, '_callback') and self._callback:
-            self._callback()
-            self._callback = None
-        return await super().async_step_abort(user_input)
-
-    async def async_added_to_hass(self):
-        await super().async_added_to_hass()
-        self._restored_state = None
-        last_state = await self.async_get_last_state()
-        if last_state and last_state.state not in (None, "unknown", "unavailable"):
-            _LOGGER.debug("[Cover] Storing last known state for later: %s", last_state.state)
-            self._restored_state = last_state
-        # Always start as unknown until a fresh value is received
-        self._state = "unknown"
-        self._initialized = False
-        self.async_write_ha_state()
-
-    async def _update_position(self, position):
-        if 0 <= position <= 100:
-            self._current_position = 100 - position
-            self._state = "open" if position < 100 else "closed"
-            self._is_closing = False
-            self._is_opening = False
-            self._last_state_update = datetime.now()
-            self._initialized = True
-            _LOGGER.debug(f"Updated cover position: {position}")
-        self.async_write_ha_state()
+        return self.async_show_form(step_id="settings", data_schema=SETTINGS_SCHEMA)
 
 
 class RyseOptionsFlow(config_entries.OptionsFlow):
     """Handle options for RYSE integration."""
 
     async def async_step_init(self, user_input=None):
-        """Manage the options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
@@ -347,19 +303,27 @@ class RyseOptionsFlow(config_entries.OptionsFlow):
                     ): vol.All(vol.Coerce(int), vol.Range(min=60, max=3600)),
                     vol.Optional(
                         "idle_disconnect_timeout",
-                        default=options.get("idle_disconnect_timeout", DEFAULT_IDLE_DISCONNECT_TIMEOUT),
+                        default=options.get(
+                            "idle_disconnect_timeout", DEFAULT_IDLE_DISCONNECT_TIMEOUT
+                        ),
                     ): vol.All(vol.Coerce(int), vol.Range(min=10, max=300)),
                     vol.Optional(
                         "connection_timeout",
-                        default=options.get("connection_timeout", DEFAULT_CONNECTION_TIMEOUT),
+                        default=options.get(
+                            "connection_timeout", DEFAULT_CONNECTION_TIMEOUT
+                        ),
                     ): vol.All(vol.Coerce(int), vol.Range(min=5, max=60)),
                     vol.Optional(
                         "max_retry_attempts",
-                        default=options.get("max_retry_attempts", DEFAULT_MAX_RETRY_ATTEMPTS),
+                        default=options.get(
+                            "max_retry_attempts", DEFAULT_MAX_RETRY_ATTEMPTS
+                        ),
                     ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
                     vol.Optional(
                         "active_reconnect_delay",
-                        default=options.get("active_reconnect_delay", DEFAULT_ACTIVE_RECONNECT_DELAY),
+                        default=options.get(
+                            "active_reconnect_delay", DEFAULT_ACTIVE_RECONNECT_DELAY
+                        ),
                     ): vol.All(vol.Coerce(int), vol.Range(min=1, max=30)),
                     vol.Optional(
                         "disable_battery_sensor",
