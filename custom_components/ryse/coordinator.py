@@ -87,13 +87,14 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             self._was_unavailable = False
         self.async_update_listeners()
         # Proactively connect when we hear an advertisement so the connection
-        # is warm when a command arrives. Only in passive mode (active mode
-        # handles its own reconnection). Throttled by connect()'s own guards.
+        # is warm when a command arrives. In active mode, this also recovers
+        # from silent connection drops (where the disconnect callback didn't fire).
         if (
-            not self.device._active_mode
-            and not self.device._is_connected
+            not self.device._is_connected
             and not self.device._connecting
         ):
+            if self.device._active_mode:
+                _LOGGER.info(f"[Coordinator] Active mode: connection lost silently for {self._name}, reconnecting on advertisement")
             self.hass.async_create_task(self._warm_connect())
 
     async def _warm_connect(self):
