@@ -23,6 +23,21 @@ from datetime import datetime
 
 _LOGGER = logging.getLogger(__name__)
 
+
+def _mac_bit_distance(mac_a: str, mac_b: str) -> int:
+    """Return the number of differing bits between two MAC addresses.
+
+    ESPHome Bluetooth proxies occasionally report MAC addresses with
+    single-bit corruptions.  Comparing at the bit level lets us detect
+    these phantom duplicates and suppress them.
+    """
+    try:
+        bytes_a = bytes.fromhex(mac_a.replace(":", "").replace("-", ""))
+        bytes_b = bytes.fromhex(mac_b.replace(":", "").replace("-", ""))
+    except (ValueError, AttributeError):
+        return 999  # unparseable → treat as different
+    return sum(bin(a ^ b).count("1") for a, b in zip(bytes_a, bytes_b))
+
 PAIRING_MODE_FLAG = 0x01  # LE Limited Discoverable Mode (standard pairing mode)
 
 class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -107,8 +122,19 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered_devices = {}
         exclude_addresses = exclude_addresses or set()
         for info in async_discovered_service_info(self.hass):
-            if info.address.upper() in exclude_addresses:
+            addr_upper = info.address.upper()
+            if addr_upper in exclude_addresses:
                 _LOGGER.debug("[ConfigFlow] Excluding already-configured device: %s", info.address)
+                continue
+            # Suppress phantom devices caused by ESPHome proxy MAC corruption
+            # (single-bit flips). If the address is within 2 bits of a configured
+            # address, treat it as a corrupted duplicate.
+            is_phantom = any(
+                _mac_bit_distance(addr_upper, known) <= 2
+                for known in exclude_addresses
+            )
+            if is_phantom:
+                _LOGGER.debug("[ConfigFlow] Excluding phantom device (bit-flip): %s", info.address)
                 continue
             is_ryse = (
                 (info.name and info.name.startswith("RZSS")) or
@@ -245,6 +271,16 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # discovery flows (from different proxies/adapters) into one.
         await self.async_set_unique_id(address)
         self._abort_if_unique_id_configured()
+
+        # Suppress phantom devices from ESPHome proxy MAC corruption (bit flips)
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            known = entry.data.get("address", "")
+            if known and _mac_bit_distance(address, known) <= 2:
+                _LOGGER.debug(
+                    "[ConfigFlow] Aborting bluetooth discovery for phantom device %s (near %s)",
+                    address, known,
+                )
+                return self.async_abort(reason="already_configured")
         name = getattr(discovery_info, "name", "RYSE SmartShade")
         display_name = f"{name} ({address})"
         self._discovered_devices[address] = display_name
