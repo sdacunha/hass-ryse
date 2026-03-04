@@ -39,6 +39,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             hass, self._handle_adv, {"address": address}, bluetooth.BluetoothScanningMode.ACTIVE
         )
         self._reconnect_task = None
+        self._last_warm_connect_attempt = None
         self.device.add_disconnect_callback(self._handle_device_disconnected)
         # Start the initialization timer
         self.hass.async_create_task(self._async_init_timeout())
@@ -93,14 +94,34 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             not self.device._is_connected
             and not self.device._connecting
         ):
+            # Don't pile on if _active_reconnect is already trying
+            if self._reconnect_task and not self._reconnect_task.done():
+                return
+            now = datetime.now()
             if self.device._active_mode:
-                _LOGGER.info(f"[Coordinator] Active mode: connection lost silently for {self._name}, reconnecting on advertisement")
-            self.hass.async_create_task(self._warm_connect())
+                # Active mode: cooldown of 60s between warm connect attempts
+                if (
+                    self._last_warm_connect_attempt is None
+                    or (now - self._last_warm_connect_attempt) > timedelta(seconds=60)
+                ):
+                    _LOGGER.info("[Coordinator] Active mode: reconnecting on advertisement for %s", self._name)
+                    self._last_warm_connect_attempt = now
+                    self.hass.async_create_task(self._warm_connect())
+            else:
+                # Passive mode: cooldown of 5 minutes
+                if (
+                    self._last_warm_connect_attempt is None
+                    or (now - self._last_warm_connect_attempt) > timedelta(minutes=5)
+                ):
+                    self._last_warm_connect_attempt = now
+                    self.hass.async_create_task(self._warm_connect())
 
     async def _warm_connect(self):
         """Proactively connect after hearing an advertisement."""
         try:
-            await self.device.connect()
+            if await self.device.connect():
+                # Reset cooldown on success so next disconnect can reconnect immediately
+                self._last_warm_connect_attempt = None
         except Exception as e:
             _LOGGER.debug("[Coordinator] Warm connect failed for %s: %s", self._name, e)
 

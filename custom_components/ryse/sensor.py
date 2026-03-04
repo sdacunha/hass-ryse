@@ -100,7 +100,7 @@ class RyseBatterySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         # NEW: If the device is not connected or the cover is unavailable, mark battery sensor unavailable
         if not self._coordinator.available or not cover_available:
             _LOGGER.debug("[BatterySensor] Device is offline or cover is unavailable at startup, marking battery sensor unavailable.")
-            self.mark_unavailable()
+            self.async_write_ha_state()
             return
         if self._coordinator.battery is not None and cover_available:
             _LOGGER.debug("[BatterySensor] Immediate battery update from latest advertisement: %s", self._coordinator.battery)
@@ -112,10 +112,10 @@ class RyseBatterySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 await self._handle_battery_update(int(last_state.state))
             else:
                 _LOGGER.debug("[BatterySensor] No fresh battery value and no last state, marking battery sensor unavailable.")
-                self.mark_unavailable()
+                self.async_write_ha_state()
         else:
             _LOGGER.debug("[BatterySensor] Cover is unavailable at startup, marking battery sensor unavailable and not restoring last state.")
-            self.mark_unavailable()
+            self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self):
         await super().async_will_remove_from_hass()
@@ -125,14 +125,9 @@ class RyseBatterySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         _LOGGER.debug("Battery sensor callback: received battery level %s", battery_level)
         await self._coordinator.async_update_battery(battery_level)
 
-    def mark_unavailable(self):
-        """Mark the battery sensor as unavailable and update state."""
-        _LOGGER.debug(f"[BatterySensor] mark_unavailable called for {self.entity_id}")
-        self.hass.async_create_task(self._coordinator.async_update_battery(None))
-
     def _handle_device_unavailable(self):
-        _LOGGER.warning("[BatterySensor] Device became unavailable, marking battery sensor as unavailable.")
-        self.hass.async_create_task(self._coordinator.async_update_battery(None))
+        _LOGGER.debug("[BatterySensor] Device became unavailable; keeping last known battery value.")
+        self.async_write_ha_state()
 
     def _handle_adv_seen(self):
         if not self.available:
