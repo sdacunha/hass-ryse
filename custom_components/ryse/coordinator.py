@@ -289,10 +289,27 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                 await operation(*args)
                 return
             except (BleakError, ConnectionError) as e:
+                err_str = str(e)
                 _LOGGER.warning(
                     "[Coordinator] Command failed for %s (attempt %d): %s",
                     self._name, attempt + 1, e,
                 )
+                # Insufficient authentication means the BLE session is stale
+                # (e.g. after HA reboot). Try to re-pair before retrying.
+                if "Insufficient authentication" in err_str and attempt == 0:
+                    _LOGGER.warning(
+                        "[Coordinator] %s: BLE auth failed, attempting re-pair",
+                        self._name,
+                    )
+                    try:
+                        await self.device.client.pair()
+                        _LOGGER.info("[Coordinator] %s: BLE re-pair successful", self._name)
+                        continue  # Retry the command without disconnecting
+                    except Exception as pair_err:
+                        _LOGGER.error(
+                            "[Coordinator] %s: BLE re-pair failed: %s",
+                            self._name, pair_err,
+                        )
                 # Force disconnect to clear stale state before retry
                 await self.device.disconnect()
                 if attempt == 0:
