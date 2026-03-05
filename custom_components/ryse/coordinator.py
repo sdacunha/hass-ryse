@@ -19,7 +19,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             address=address,
             needs_poll_method=self._needs_poll,
             poll_method=self._async_update,
-            mode=bluetooth.BluetoothScanningMode.ACTIVE,
+            mode=bluetooth.BluetoothScanningMode.PASSIVE,
             connectable=True,
         )
         self.device = device
@@ -36,7 +36,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             hass, self._handle_unavailable, address, connectable=True
         )
         self._adv_cancel = bluetooth.async_register_callback(
-            hass, self._handle_adv, {"address": address}, bluetooth.BluetoothScanningMode.ACTIVE
+            hass, self._handle_adv, {"address": address}, bluetooth.BluetoothScanningMode.PASSIVE
         )
         self._reconnect_task = None
         self._last_warm_connect_attempt = None

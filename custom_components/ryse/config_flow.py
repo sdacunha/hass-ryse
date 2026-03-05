@@ -181,6 +181,20 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if not _is_ryse_device(discovery_info):
             return self.async_abort(reason="not_supported")
 
+        # If we already have configured RYSE devices, only surface new
+        # discoveries that are in pairing mode.  Phantom devices from
+        # ESPHome proxy MAC corruption will never be in pairing mode.
+        existing = self.hass.config_entries.async_entries(DOMAIN)
+        if existing:
+            mfr_data = discovery_info.manufacturer_data.get(RYSE_MANUFACTURER_ID)
+            in_pairing = bool(mfr_data and len(mfr_data) >= 1 and (mfr_data[0] & 0x40))
+            if not in_pairing:
+                _LOGGER.debug(
+                    "[ConfigFlow] Ignoring non-pairing RZSS discovery %s (likely phantom)",
+                    discovery_info.address,
+                )
+                return self.async_abort(reason="not_supported")
+
         self._discovery_info = discovery_info
         title = f"{discovery_info.name} ({discovery_info.address})"
         self.context["title_placeholders"] = {"name": title}
