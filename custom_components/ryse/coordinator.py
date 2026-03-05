@@ -108,13 +108,11 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                     self._last_warm_connect_attempt = now
                     self.hass.async_create_task(self._warm_connect())
             else:
-                # Passive mode: cooldown of 5 minutes
-                if (
-                    self._last_warm_connect_attempt is None
-                    or (now - self._last_warm_connect_attempt) > timedelta(minutes=5)
-                ):
-                    self._last_warm_connect_attempt = now
-                    self.hass.async_create_task(self._warm_connect())
+                # Passive mode: don't warm-connect. Connect on-demand when a
+                # command is sent via _ensure_connected(). Warm connecting just
+                # creates pointless connect/disconnect churn because the idle
+                # timer disconnects before any command arrives.
+                pass
 
     async def _warm_connect(self):
         """Proactively connect after hearing an advertisement."""
@@ -181,6 +179,10 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
 
     @callback
     def _needs_poll(self, service_info, seconds_since_last_poll):
+        # Active mode: advertisements + persistent connection handle everything.
+        # Polling just causes connect/disconnect churn and auth failures.
+        if self.device._active_mode:
+            return False
         ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
         should_poll = (
             self.hass.state == self.hass.CoreState.running and
