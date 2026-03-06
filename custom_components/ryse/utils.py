@@ -1,5 +1,6 @@
 """Utility functions for the RYSE integration."""
 
+
 def build_position_packet(pos: int) -> bytes:
     """Convert MAC address to reversed hex array, prepend a prefix with a position last byte, and append a checksum."""
 
@@ -15,6 +16,7 @@ def build_position_packet(pos: int) -> bytes:
     # Append checksum
     return data_bytes + bytes([checksum])
 
+
 def build_get_position_packet() -> bytes:
     """Build raw data to send to the RYSE ble device to retrieve current position"""
 
@@ -24,4 +26,4 @@ def build_get_position_packet() -> bytes:
     checksum = sum(data_bytes[2:]) % 256
 
     # Append checksum
-    return data_bytes + bytes([checksum]) 
+    return data_bytes + bytes([checksum])

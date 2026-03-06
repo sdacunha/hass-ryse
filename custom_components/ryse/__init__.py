@@ -1,4 +1,5 @@
 """The RYSE BLE Device integration."""
+
 from __future__ import annotations
 
 import logging
@@ -35,6 +36,7 @@ async def async_setup(hass: HomeAssistant, config: dict):
     """Set up the RYSE component."""
     _LOGGER.info("Setting up RYSE Device integration")
     return True
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up RYSE from a config entry."""

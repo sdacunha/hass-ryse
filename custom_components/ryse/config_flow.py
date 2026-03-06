@@ -38,10 +38,7 @@ def _is_ryse_device(service_info) -> bool:
 
     Requires BOTH the RZSS name prefix AND the RYSE manufacturer ID.
     """
-    has_name = bool(
-        getattr(service_info, "name", None)
-        and service_info.name.startswith("RZSS")
-    )
+    has_name = bool(getattr(service_info, "name", None) and service_info.name.startswith("RZSS"))
     has_mfr = RYSE_MANUFACTURER_ID in getattr(service_info, "manufacturer_data", {})
     return has_name and has_mfr
 
@@ -52,18 +49,18 @@ SETTINGS_SCHEMA = vol.Schema(
         vol.Optional("poll_interval", default=DEFAULT_POLL_INTERVAL): vol.All(
             vol.Coerce(int), vol.Range(min=60, max=3600)
         ),
-        vol.Optional(
-            "idle_disconnect_timeout", default=DEFAULT_IDLE_DISCONNECT_TIMEOUT
-        ): vol.All(vol.Coerce(int), vol.Range(min=10, max=300)),
-        vol.Optional(
-            "connection_timeout", default=DEFAULT_CONNECTION_TIMEOUT
-        ): vol.All(vol.Coerce(int), vol.Range(min=5, max=60)),
-        vol.Optional(
-            "max_retry_attempts", default=DEFAULT_MAX_RETRY_ATTEMPTS
-        ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
-        vol.Optional(
-            "active_reconnect_delay", default=DEFAULT_ACTIVE_RECONNECT_DELAY
-        ): vol.All(vol.Coerce(int), vol.Range(min=1, max=30)),
+        vol.Optional("idle_disconnect_timeout", default=DEFAULT_IDLE_DISCONNECT_TIMEOUT): vol.All(
+            vol.Coerce(int), vol.Range(min=10, max=300)
+        ),
+        vol.Optional("connection_timeout", default=DEFAULT_CONNECTION_TIMEOUT): vol.All(
+            vol.Coerce(int), vol.Range(min=5, max=60)
+        ),
+        vol.Optional("max_retry_attempts", default=DEFAULT_MAX_RETRY_ATTEMPTS): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=10)
+        ),
+        vol.Optional("active_reconnect_delay", default=DEFAULT_ACTIVE_RECONNECT_DELAY): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=30)
+        ),
         vol.Optional("disable_battery_sensor", default=False): bool,
     }
 )
@@ -89,16 +86,12 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # Manual flow: user → scan → pair → name → settings
     # ------------------------------------------------------------------
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             return await self.async_step_scan()
         return self.async_show_form(step_id="user", data_schema=vol.Schema({}))
 
-    async def async_step_scan(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_scan(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         existing = self.hass.config_entries.async_entries(DOMAIN)
         exclude = set()
         for entry in existing:
@@ -122,15 +115,10 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self._selected_device = address
                     return await self.async_step_pair()
 
-        device_options = {
-            addr: info["label"]
-            for addr, info in self._discovered_devices.items()
-        }
+        device_options = {addr: info["label"] for addr, info in self._discovered_devices.items()}
 
         if device_options:
-            data_schema = vol.Schema(
-                {vol.Required("device_address"): vol.In(device_options)}
-            )
+            data_schema = vol.Schema({vol.Required("device_address"): vol.In(device_options)})
         else:
             data_schema = vol.Schema({})
 
@@ -170,9 +158,7 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # Bluetooth auto-discovery: bluetooth → bluetooth_confirm → pair → …
     # ------------------------------------------------------------------
 
-    async def async_step_bluetooth(
-        self, discovery_info: BluetoothServiceInfoBleak
-    ) -> ConfigFlowResult:
+    async def async_step_bluetooth(self, discovery_info: BluetoothServiceInfoBleak) -> ConfigFlowResult:
         """Handle a flow initialized by bluetooth discovery."""
         await self.async_set_unique_id(discovery_info.address)
         self._abort_if_unique_id_configured()
@@ -200,9 +186,7 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self.context["title_placeholders"] = {"name": title}
         return await self.async_step_bluetooth_confirm()
 
-    async def async_step_bluetooth_confirm(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_bluetooth_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Confirm the discovered device before pairing."""
         if user_input is not None:
             self._selected_device = self._discovery_info.address
@@ -233,9 +217,7 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.error("Device not found at address: %s", address)
                 return self.async_abort(reason="device_not_found")
 
-            client = await establish_connection(
-                BleakClient, ble_device, address, max_attempts=3
-            )
+            client = await establish_connection(BleakClient, ble_device, address, max_attempts=3)
 
             if not client.is_connected:
                 _LOGGER.error("Failed to connect to device: %s", address)
@@ -250,7 +232,8 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except Exception as e:
                 _LOGGER.warning(
                     "Could not verify notifications for %s: %s, proceeding anyway",
-                    address, e,
+                    address,
+                    e,
                 )
 
             await client.disconnect()
@@ -265,9 +248,7 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         }
         return await self.async_step_name()
 
-    async def async_step_name(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_name(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
             name = user_input.get("name")
@@ -282,9 +263,7 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def async_step_settings(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_settings(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             data = dict(self._pending_entry_data)
             return self.async_create_entry(
@@ -317,27 +296,19 @@ class RyseOptionsFlow(config_entries.OptionsFlow):
                     ): vol.All(vol.Coerce(int), vol.Range(min=60, max=3600)),
                     vol.Optional(
                         "idle_disconnect_timeout",
-                        default=options.get(
-                            "idle_disconnect_timeout", DEFAULT_IDLE_DISCONNECT_TIMEOUT
-                        ),
+                        default=options.get("idle_disconnect_timeout", DEFAULT_IDLE_DISCONNECT_TIMEOUT),
                     ): vol.All(vol.Coerce(int), vol.Range(min=10, max=300)),
                     vol.Optional(
                         "connection_timeout",
-                        default=options.get(
-                            "connection_timeout", DEFAULT_CONNECTION_TIMEOUT
-                        ),
+                        default=options.get("connection_timeout", DEFAULT_CONNECTION_TIMEOUT),
                     ): vol.All(vol.Coerce(int), vol.Range(min=5, max=60)),
                     vol.Optional(
                         "max_retry_attempts",
-                        default=options.get(
-                            "max_retry_attempts", DEFAULT_MAX_RETRY_ATTEMPTS
-                        ),
+                        default=options.get("max_retry_attempts", DEFAULT_MAX_RETRY_ATTEMPTS),
                     ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
                     vol.Optional(
                         "active_reconnect_delay",
-                        default=options.get(
-                            "active_reconnect_delay", DEFAULT_ACTIVE_RECONNECT_DELAY
-                        ),
+                        default=options.get("active_reconnect_delay", DEFAULT_ACTIVE_RECONNECT_DELAY),
                     ): vol.All(vol.Coerce(int), vol.Range(min=1, max=30)),
                     vol.Optional(
                         "disable_battery_sensor",

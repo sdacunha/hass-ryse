@@ -8,9 +8,11 @@ import logging
 
 _LOGGER = logging.getLogger(__name__)
 
+
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities([SmartShadeCover(coordinator, entry)])
+
 
 class SmartShadeCover(CoordinatorEntity, CoverEntity, RestoreEntity):
     def __init__(self, coordinator, entry):
@@ -47,11 +49,7 @@ class SmartShadeCover(CoordinatorEntity, CoverEntity, RestoreEntity):
 
     @property
     def supported_features(self):
-        return (
-            CoverEntityFeature.OPEN |
-            CoverEntityFeature.CLOSE |
-            CoverEntityFeature.SET_POSITION
-        )
+        return CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.SET_POSITION
 
     @property
     def device_info(self):
@@ -83,7 +81,9 @@ class SmartShadeCover(CoordinatorEntity, CoverEntity, RestoreEntity):
         await super().async_added_to_hass()
         _LOGGER.debug(
             "[Cover] async_added_to_hass: available=%s, initializing=%s (coordinator.available=%s, coordinator.initializing=%s)",
-            self.available, self._coordinator.initializing, self._coordinator.available, self._coordinator.initializing
+            self.available,
+            self._coordinator.initializing,
+            self._coordinator.available,
+            self._coordinator.initializing,
         )
         self.async_write_ha_state()
-

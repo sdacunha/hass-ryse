@@ -19,6 +19,7 @@ _LOGGER = logging.getLogger(__name__)
 POSITION_CHAR_UUID = HARDCODED_UUIDS["rx_uuid"]
 COMMAND_CHAR_UUID = HARDCODED_UUIDS["tx_uuid"]
 
+
 class RyseDevice:
     def __init__(self, address: str):
         self.address = address
@@ -103,7 +104,7 @@ class RyseDevice:
         self.ble_device = ble_device
 
     def update_ble_device_from_adv(self, service_info):
-        if hasattr(service_info, 'device') and service_info.device:
+        if hasattr(service_info, "device") and service_info.device:
             self.set_ble_device(service_info.device)
 
     async def connect(self):
@@ -130,7 +131,9 @@ class RyseDevice:
                 raise ConnectionError("No BLEDevice available for connection")
 
             try:
-                _LOGGER.info(f"[{self.address}] Connecting via bleak-retry-connector (max_attempts={self._max_retry_attempts})")
+                _LOGGER.info(
+                    f"[{self.address}] Connecting via bleak-retry-connector (max_attempts={self._max_retry_attempts})"
+                )
 
                 self.client = await establish_connection(
                     BleakClient,
@@ -229,10 +232,10 @@ class RyseDevice:
     @staticmethod
     def parse_advertisement(service_info) -> dict:
         result = {}
-        for mfr_id, data in getattr(service_info, 'manufacturer_data', {}).items():
+        for mfr_id, data in getattr(service_info, "manufacturer_data", {}).items():
             _LOGGER.debug(
                 "[ADV] %s mfr_id=0x%04X raw=%s (hex=%s)",
-                getattr(service_info, 'address', '?'),
+                getattr(service_info, "address", "?"),
                 mfr_id,
                 list(data),
                 data.hex(),
@@ -243,12 +246,12 @@ class RyseDevice:
             if mfr_id not in (0x0409, 0x409):
                 continue
             if len(data) >= 3:
-                result['position'] = data[1]
-                result['battery'] = data[2]
+                result["position"] = data[1]
+                result["battery"] = data[2]
         return result
 
     def poll_needed(self, seconds_since_last_poll):
         """Determine if a poll is needed based on configurable interval."""
         if seconds_since_last_poll is None:
             return True
-        return seconds_since_last_poll > self._poll_interval 
+        return seconds_since_last_poll > self._poll_interval

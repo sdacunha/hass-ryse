@@ -11,6 +11,7 @@ from .const import HARDCODED_UUIDS, DEFAULT_INIT_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
 
+
 class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, address: str, device: RyseDevice, name: str):
         super().__init__(
@@ -52,26 +53,28 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         if self._initializing:
             self._initializing = False
             if not self._available:
-                _LOGGER.info(f"Device {self._name} did not become available after {DEFAULT_INIT_TIMEOUT}s, marking as unavailable.")
+                _LOGGER.info(
+                    f"Device {self._name} did not become available after {DEFAULT_INIT_TIMEOUT}s, marking as unavailable."
+                )
             self.async_update_listeners()
 
     @callback
     def _handle_adv(self, service_info, change):
         # Always update BLE device reference from latest adv
-        if hasattr(service_info, 'device') and service_info.device:
+        if hasattr(service_info, "device") and service_info.device:
             self.device.set_ble_device(service_info.device)
         adv = self.device.parse_advertisement(service_info)
-        if adv.get('position') is not None:
-            self._position = adv['position']
+        if adv.get("position") is not None:
+            self._position = adv["position"]
             self._ready_event.set()  # Mark as ready if we get a valid adv
-        if adv.get('battery') is not None:
-            self._battery = adv['battery']
+        if adv.get("battery") is not None:
+            self._battery = adv["battery"]
             # Call battery callbacks with the new battery value
             for callback in self.device._battery_callbacks:
                 if inspect.iscoroutinefunction(callback):
-                    self.hass.async_create_task(callback(adv['battery']))
+                    self.hass.async_create_task(callback(adv["battery"]))
                 else:
-                    callback(adv['battery'])
+                    callback(adv["battery"])
             # Call advertisement callbacks
             for callback in self.device._adv_callbacks:
                 if inspect.iscoroutinefunction(callback):
@@ -90,19 +93,15 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         # Proactively connect when we hear an advertisement so the connection
         # is warm when a command arrives. In active mode, this also recovers
         # from silent connection drops (where the disconnect callback didn't fire).
-        if (
-            not self.device._is_connected
-            and not self.device._connecting
-        ):
+        if not self.device._is_connected and not self.device._connecting:
             # Don't pile on if _active_reconnect is already trying
             if self._reconnect_task and not self._reconnect_task.done():
                 return
             now = datetime.now()
             if self.device._active_mode:
                 # Active mode: cooldown of 60s between warm connect attempts
-                if (
-                    self._last_warm_connect_attempt is None
-                    or (now - self._last_warm_connect_attempt) > timedelta(seconds=60)
+                if self._last_warm_connect_attempt is None or (now - self._last_warm_connect_attempt) > timedelta(
+                    seconds=60
                 ):
                     _LOGGER.info("[Coordinator] Active mode: reconnecting on advertisement for %s", self._name)
                     self._last_warm_connect_attempt = now
@@ -136,7 +135,9 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             time_since_adv = datetime.now() - self._last_adv
             # Be lenient - battery devices may not advertise frequently
             if time_since_adv < timedelta(minutes=15):
-                _LOGGER.debug(f"[Coordinator] {self._name} stopped advertising but was seen {time_since_adv.total_seconds():.0f}s ago, keeping as available")
+                _LOGGER.debug(
+                    f"[Coordinator] {self._name} stopped advertising but was seen {time_since_adv.total_seconds():.0f}s ago, keeping as available"
+                )
                 return
 
         _LOGGER.warning(f"[Coordinator] _handle_unavailable called for {self._name} (address: {self.device.address})")
@@ -159,13 +160,12 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         """Reconnect in active mode after unexpected disconnect."""
         for attempt in range(self.device._max_retry_attempts):
             await asyncio.sleep(self.device._active_reconnect_delay)
-            ble_device = bluetooth.async_ble_device_from_address(
-                self.hass, self.address, connectable=True
-            )
+            ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
             if not ble_device:
                 _LOGGER.debug(
                     "[Coordinator] Active reconnect attempt %d: no BLE device for %s",
-                    attempt + 1, self._name,
+                    attempt + 1,
+                    self._name,
                 )
                 continue
             self.device.set_ble_device(ble_device)
@@ -174,7 +174,8 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                 return
         _LOGGER.warning(
             "[Coordinator] Active mode reconnect failed for %s after %d attempts",
-            self._name, self.device._max_retry_attempts,
+            self._name,
+            self.device._max_retry_attempts,
         )
 
     @callback
@@ -185,13 +186,17 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             return False
         ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
         should_poll = (
-            self.hass.state == self.hass.CoreState.running and
-            self.device.poll_needed(seconds_since_last_poll)
+            self.hass.state == self.hass.CoreState.running
+            and self.device.poll_needed(seconds_since_last_poll)
             and bool(ble_device)
         )
         _LOGGER.debug(
             "[Coordinator] _needs_poll called: seconds_since_last_poll=%s, has_ble_device=%s, should_poll=%s, position=%s, battery=%s",
-            seconds_since_last_poll, bool(ble_device), should_poll, self._position, self._battery
+            seconds_since_last_poll,
+            bool(ble_device),
+            should_poll,
+            self._position,
+            self._battery,
         )
         return should_poll
 
@@ -213,7 +218,12 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             return
         try:
             data = await self.device.read_gatt(HARDCODED_UUIDS["rx_uuid"])
-            _LOGGER.debug("[Coordinator] GATT poll data for %s: raw=%s (hex=%s)", self._name, list(data) if data else None, data.hex() if data else None)
+            _LOGGER.debug(
+                "[Coordinator] GATT poll data for %s: raw=%s (hex=%s)",
+                self._name,
+                list(data) if data else None,
+                data.hex() if data else None,
+            )
             if len(data) >= 3:
                 self._position = data[1]
                 self._battery = data[2]
@@ -294,7 +304,9 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                 err_str = str(e)
                 _LOGGER.warning(
                     "[Coordinator] Command failed for %s (attempt %d): %s",
-                    self._name, attempt + 1, e,
+                    self._name,
+                    attempt + 1,
+                    e,
                 )
                 # Insufficient authentication means the BLE session is stale
                 # (e.g. after HA reboot). Try to re-pair before retrying.
@@ -310,7 +322,8 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                     except Exception as pair_err:
                         _LOGGER.error(
                             "[Coordinator] %s: BLE re-pair failed: %s",
-                            self._name, pair_err,
+                            self._name,
+                            pair_err,
                         )
                 # Force disconnect to clear stale state before retry
                 await self.device.disconnect()
@@ -335,4 +348,4 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         """Close the cover."""
         if self.position is not None and self.position == 100:
             return
-        await self._execute_command(self.device.close) 
+        await self._execute_command(self.device.close)

@@ -1,4 +1,5 @@
 """The RYSE Battery Sensor."""
+
 from __future__ import annotations
 
 import logging
@@ -8,19 +9,17 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from datetime import datetime, timedelta
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .ryse import RyseDevice
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -30,6 +29,7 @@ async def async_setup_entry(
     """Set up the RYSE battery sensor."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities([RyseBatterySensor(coordinator, entry)])
+
 
 class RyseBatterySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
     """Representation of a RYSE battery sensor."""
@@ -64,7 +64,7 @@ class RyseBatterySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         return DeviceInfo(
             identifiers={(DOMAIN, self._coordinator.device.address)},
             connections={(dr.CONNECTION_BLUETOOTH, self._coordinator.device.address)},
-            name=self._attr_name,
+            name=self._entry.data.get("name", self._coordinator.device.address),
             manufacturer="RYSE Inc.",
             model="SmartShade",
         )
@@ -80,7 +80,10 @@ class RyseBatterySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         await super().async_added_to_hass()
         _LOGGER.debug(
             "[BatterySensor] async_added_to_hass: available=%s, initializing=%s (coordinator.available=%s, coordinator.initializing=%s)",
-            self.available, self._coordinator.initializing, self._coordinator.available, self._coordinator.initializing
+            self.available,
+            self._coordinator.initializing,
+            self._coordinator.available,
+            self._coordinator.initializing,
         )
         self.async_write_ha_state()
         self._coordinator.device.add_battery_callback(self._handle_battery_update)
@@ -99,11 +102,15 @@ class RyseBatterySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         cover_available = True
         # NEW: If the device is not connected or the cover is unavailable, mark battery sensor unavailable
         if not self._coordinator.available or not cover_available:
-            _LOGGER.debug("[BatterySensor] Device is offline or cover is unavailable at startup, marking battery sensor unavailable.")
+            _LOGGER.debug(
+                "[BatterySensor] Device is offline or cover is unavailable at startup, marking battery sensor unavailable."
+            )
             self.async_write_ha_state()
             return
         if self._coordinator.battery is not None and cover_available:
-            _LOGGER.debug("[BatterySensor] Immediate battery update from latest advertisement: %s", self._coordinator.battery)
+            _LOGGER.debug(
+                "[BatterySensor] Immediate battery update from latest advertisement: %s", self._coordinator.battery
+            )
             await self._handle_battery_update(self._coordinator.battery)
         elif cover_available:
             last_state = await self.async_get_last_state()
@@ -111,10 +118,14 @@ class RyseBatterySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 _LOGGER.debug("[BatterySensor] Restoring last known battery value: %s", last_state.state)
                 await self._handle_battery_update(int(last_state.state))
             else:
-                _LOGGER.debug("[BatterySensor] No fresh battery value and no last state, marking battery sensor unavailable.")
+                _LOGGER.debug(
+                    "[BatterySensor] No fresh battery value and no last state, marking battery sensor unavailable."
+                )
                 self.async_write_ha_state()
         else:
-            _LOGGER.debug("[BatterySensor] Cover is unavailable at startup, marking battery sensor unavailable and not restoring last state.")
+            _LOGGER.debug(
+                "[BatterySensor] Cover is unavailable at startup, marking battery sensor unavailable and not restoring last state."
+            )
             self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self):
@@ -131,4 +142,4 @@ class RyseBatterySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
 
     def _handle_adv_seen(self):
         if not self.available:
-            self.async_write_ha_state() 
+            self.async_write_ha_state()
