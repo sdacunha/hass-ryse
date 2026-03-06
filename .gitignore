@@ -31,4 +31,9 @@ custom_components/*/__pycache__/
 *.swp
 *.swo
 *.bak
-*.tmp 
+*.tmp
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
