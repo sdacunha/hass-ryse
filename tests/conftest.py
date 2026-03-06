@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import pathlib
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
@@ -13,6 +15,24 @@ from custom_components.ryse.const import DOMAIN
 # The enable_bluetooth fixture requires Linux dbus access (bluetooth_adapters).
 # On macOS/Windows, we skip tests that need the full HA bluetooth stack.
 _HAS_BLUETOOTH_FIXTURE = sys.platform == "linux"
+
+
+@pytest.fixture(autouse=True)
+def register_ryse_integration(hass):
+    """Register the ryse custom component so HA's loader can find it."""
+    from homeassistant import loader
+
+    manifest_path = pathlib.Path(__file__).parent.parent / "custom_components" / "ryse" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+
+    integration = loader.Integration(
+        hass,
+        f"{loader.PACKAGE_CUSTOM_COMPONENTS}.{DOMAIN}",
+        manifest_path.parent,
+        manifest,
+    )
+
+    hass.data.setdefault(loader.DATA_CUSTOM_COMPONENTS, {})[DOMAIN] = integration
 
 
 @pytest.fixture

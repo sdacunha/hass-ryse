@@ -14,6 +14,13 @@ from custom_components.ryse.coordinator import RyseCoordinator
 from . import RYSE_ADDRESS
 
 
+def _close_coro(coro, *args, **kwargs):
+    """Close coroutines passed to async_create_task to avoid 'was never awaited' warnings."""
+    if hasattr(coro, "close"):
+        coro.close()
+    return MagicMock()
+
+
 @pytest.fixture
 def mock_coordinator(hass: HomeAssistant, mock_ryse_device):
     """Create a RyseCoordinator with mocked dependencies."""
@@ -49,6 +56,9 @@ def mock_coordinator(hass: HomeAssistant, mock_ryse_device):
     coord._reconnect_task = None
     coord._last_warm_connect_attempt = None
     coord.async_update_listeners = MagicMock()
+
+    coord.hass.async_create_task = MagicMock(side_effect=_close_coro)
+
     return coord
 
 
@@ -168,7 +178,7 @@ class TestWarmConnect:
             "battery": 85,
         }
 
-        with patch.object(mock_coordinator.hass, "async_create_task") as mock_task:
+        with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
             mock_coordinator._handle_adv(MagicMock(), MagicMock())
 
         # Should NOT schedule warm connect in passive mode
@@ -186,7 +196,7 @@ class TestWarmConnect:
             "battery": 85,
         }
 
-        with patch.object(mock_coordinator.hass, "async_create_task") as mock_task:
+        with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
             mock_coordinator._handle_adv(MagicMock(), MagicMock())
 
         # Should schedule warm connect
@@ -203,7 +213,7 @@ class TestWarmConnect:
             "battery": 85,
         }
 
-        with patch.object(mock_coordinator.hass, "async_create_task") as mock_task:
+        with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
             mock_coordinator._handle_adv(MagicMock(), MagicMock())
 
         # Should NOT warm connect (cooldown not expired)
@@ -221,7 +231,7 @@ class TestWarmConnect:
             "battery": 85,
         }
 
-        with patch.object(mock_coordinator.hass, "async_create_task") as mock_task:
+        with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
             mock_coordinator._handle_adv(MagicMock(), MagicMock())
 
         assert mock_task.called
@@ -238,7 +248,7 @@ class TestWarmConnect:
             "battery": 85,
         }
 
-        with patch.object(mock_coordinator.hass, "async_create_task") as mock_task:
+        with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
             mock_coordinator._handle_adv(MagicMock(), MagicMock())
 
         # async_create_task should only be called for callbacks, not warm connect
@@ -255,7 +265,7 @@ class TestWarmConnect:
             "battery": 85,
         }
 
-        with patch.object(mock_coordinator.hass, "async_create_task") as mock_task:
+        with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
             mock_coordinator._handle_adv(MagicMock(), MagicMock())
 
         for call in mock_task.call_args_list:
@@ -447,7 +457,7 @@ class TestDisconnectHandling:
         """Active mode should schedule reconnect on disconnect."""
         mock_coordinator.device._active_mode = True
 
-        with patch.object(mock_coordinator.hass, "async_create_task", return_value=MagicMock()) as mock_task:
+        with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
             mock_coordinator._handle_device_disconnected()
 
         assert mock_task.called
@@ -458,7 +468,7 @@ class TestDisconnectHandling:
         mock_coordinator._reconnect_task = MagicMock()
         mock_coordinator._reconnect_task.done.return_value = False
 
-        with patch.object(mock_coordinator.hass, "async_create_task") as mock_task:
+        with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
             mock_coordinator._handle_device_disconnected()
 
         mock_task.assert_not_called()
