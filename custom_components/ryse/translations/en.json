@@ -54,7 +54,19 @@
   "issues": {
     "ble_auth_failed": {
       "title": "{name}: Bluetooth authentication failed",
-      "description": "The Bluetooth session for **{name}** has lost its pairing. The integration was unable to re-pair automatically.\n\nTry removing and re-adding the device in the integration, or press the PAIR button on the shade and restart Home Assistant."
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Re-pair {name}",
+            "description": "The Bluetooth session for **{name}** has lost its pairing.\n\n1. Press the **PAIR button** on your RYSE SmartShade\n2. Click **Submit** to reconnect and re-pair\n\nYour existing settings will be kept."
+          }
+        },
+        "abort": {
+          "device_not_found": "Could not find the device. Make sure it is powered on and nearby.",
+          "cannot_connect": "Could not connect to the device. Make sure it is in pairing mode and try again.",
+          "repair_failed": "Re-pairing failed. Try pressing the PAIR button again and retry."
+        }
+      }
     }
   },
   "options": {

@@ -145,6 +145,16 @@ class RyseDevice:
                 )
 
                 if self.client.is_connected:
+                    # Proactively pair on every fresh connection to establish
+                    # or refresh bonding keys.  This prevents "Insufficient
+                    # authentication" errors after HA or adapter restarts.
+                    try:
+                        await self.client.pair()
+                        _LOGGER.debug(f"[{self.address}] BLE pair/bond refreshed")
+                    except Exception as pair_err:
+                        # Non-fatal — some backends or devices don't support
+                        # explicit pairing and work fine without it.
+                        _LOGGER.debug(f"[{self.address}] BLE pair skipped: {pair_err}")
                     self._is_connected = True
                     self._connecting = False
                     self._schedule_idle_disconnect()

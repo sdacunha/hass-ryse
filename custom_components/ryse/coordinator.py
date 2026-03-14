@@ -338,7 +338,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                             self.hass,
                             DOMAIN,
                             f"ble_auth_failed_{self.address}",
-                            is_fixable=False,
+                            is_fixable=True,
                             severity=ir.IssueSeverity.ERROR,
                             translation_key="ble_auth_failed",
                             translation_placeholders={"name": self._name},
