@@ -1,19 +1,20 @@
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth.active_update_coordinator import ActiveBluetoothDataUpdateCoordinator
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import issue_registry as ir
 from datetime import datetime, timedelta
 import asyncio
 import logging
 import inspect
 from bleak.exc import BleakError
 from .ryse import RyseDevice
-from .const import HARDCODED_UUIDS, DEFAULT_INIT_TIMEOUT
+from .const import DOMAIN, HARDCODED_UUIDS, DEFAULT_INIT_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
-    def __init__(self, hass: HomeAssistant, address: str, device: RyseDevice, name: str):
+    def __init__(self, hass: HomeAssistant, address: str, device: RyseDevice, name: str, entry_id: str | None = None):
         super().__init__(
             hass=hass,
             logger=_LOGGER,
@@ -25,6 +26,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         )
         self.device = device
         self._name = name
+        self._entry_id = entry_id
         self._position = None
         self._battery = None
         self._last_adv = None
@@ -299,6 +301,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                 return
             try:
                 await operation(*args)
+                ir.async_delete_issue(self.hass, DOMAIN, f"ble_auth_failed_{self.address}")
                 return
             except (BleakError, ConnectionError) as e:
                 err_str = str(e)
@@ -316,6 +319,12 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                         self._name,
                     )
                     try:
+                        # The connection may have dropped (clearing client)
+                        # before we get here — reconnect first if needed.
+                        if not self.device.client or not self.device.client.is_connected:
+                            await self.device.disconnect()
+                            if not await self._ensure_connected():
+                                continue
                         await self.device.client.pair()
                         _LOGGER.info("[Coordinator] %s: BLE re-pair successful", self._name)
                         continue  # Retry the command without disconnecting
@@ -324,6 +333,15 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                             "[Coordinator] %s: BLE re-pair failed: %s",
                             self._name,
                             pair_err,
+                        )
+                        ir.async_create_issue(
+                            self.hass,
+                            DOMAIN,
+                            f"ble_auth_failed_{self.address}",
+                            is_fixable=False,
+                            severity=ir.IssueSeverity.ERROR,
+                            translation_key="ble_auth_failed",
+                            translation_placeholders={"name": self._name},
                         )
                 # Force disconnect to clear stale state before retry
                 await self.device.disconnect()

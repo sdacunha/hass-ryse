@@ -51,6 +51,12 @@
       "failed_to_pair": "Failed to pair with the RYSE device. Please ensure it is in pairing mode and not already paired with another device, then try again."
     }
   },
+  "issues": {
+    "ble_auth_failed": {
+      "title": "{name}: Bluetooth authentication failed",
+      "description": "The Bluetooth session for **{name}** has lost its pairing. The integration was unable to re-pair automatically.\n\nTry removing and re-adding the device in the integration, or press the PAIR button on the shade and restart Home Assistant."
+    }
+  },
   "options": {
     "step": {
       "init": {

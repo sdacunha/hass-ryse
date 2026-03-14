@@ -48,7 +48,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("[init] Created RyseDevice (id: %s) for address: %s", id(device), entry.data["address"])
 
     # Create coordinator instance
-    coordinator = RyseCoordinator(hass, entry.data["address"], device, entry.data.get("name", "SmartShade"))
+    coordinator = RyseCoordinator(
+        hass, entry.data["address"], device, entry.data.get("name", "SmartShade"), entry_id=entry.entry_id
+    )
 
     # Store coordinator in hass data
     hass.data.setdefault(DOMAIN, {})

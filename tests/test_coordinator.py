@@ -55,6 +55,7 @@ def mock_coordinator(hass: HomeAssistant, mock_ryse_device):
     coord._was_unavailable = True
     coord._reconnect_task = None
     coord._last_warm_connect_attempt = None
+    coord._entry_id = "test_entry_id"
     coord.async_update_listeners = MagicMock()
 
     coord.hass.async_create_task = MagicMock(side_effect=_close_coro)
@@ -544,6 +545,73 @@ class TestExecuteCommand:
 
         # Both attempts failed → marked unavailable
         assert mock_coordinator._available is False
+
+    async def test_execute_command_auth_reconnects_when_client_none(self, mock_coordinator) -> None:
+        """When client is None during re-pair, should reconnect then pair."""
+        from bleak.exc import BleakError
+
+        operation = AsyncMock(
+            side_effect=[
+                BleakError("Insufficient authentication"),
+                None,  # succeeds on retry
+            ]
+        )
+        # Simulate client being None (connection dropped before re-pair)
+        mock_coordinator.device.client = None
+
+        new_client = MagicMock()
+        new_client.is_connected = True
+        new_client.pair = AsyncMock()
+
+        call_count = 0
+
+        async def ensure_connected_side_effect():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                # Second call is from re-pair block — restore client
+                mock_coordinator.device.client = new_client
+            return True
+
+        with patch.object(mock_coordinator, "_ensure_connected", side_effect=ensure_connected_side_effect):
+            await mock_coordinator._execute_command(operation)
+
+        new_client.pair.assert_awaited_once()
+        assert operation.await_count == 2
+
+    async def test_execute_command_auth_repair_creates_issue(self, mock_coordinator) -> None:
+        """Failed re-pair should create a HA repair issue."""
+        from bleak.exc import BleakError
+
+        operation = AsyncMock(
+            side_effect=[
+                BleakError("Insufficient authentication"),
+                BleakError("Still broken"),
+            ]
+        )
+        mock_coordinator.device.client.pair = AsyncMock(side_effect=Exception("Pair failed"))
+
+        with (
+            patch.object(mock_coordinator, "_ensure_connected", return_value=True),
+            patch("custom_components.ryse.coordinator.ir.async_create_issue") as mock_create_issue,
+        ):
+            await mock_coordinator._execute_command(operation)
+
+        mock_create_issue.assert_called_once()
+        call_kwargs = mock_create_issue.call_args
+        assert "ble_auth_failed" in call_kwargs[1]["translation_key"] or "ble_auth_failed" in str(call_kwargs)
+
+    async def test_execute_command_success_clears_issue(self, mock_coordinator) -> None:
+        """Successful command should clear any existing repair issue."""
+        operation = AsyncMock()
+
+        with (
+            patch.object(mock_coordinator, "_ensure_connected", return_value=True),
+            patch("custom_components.ryse.coordinator.ir.async_delete_issue") as mock_delete_issue,
+        ):
+            await mock_coordinator._execute_command(operation, 50)
+
+        mock_delete_issue.assert_called_once()
 
     async def test_execute_command_both_attempts_fail(self, mock_coordinator) -> None:
         """Two failures should mark device unavailable."""
