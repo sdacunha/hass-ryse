@@ -118,6 +118,8 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
     async def _warm_connect(self):
         """Proactively connect after hearing an advertisement."""
         try:
+            # Clear any stale state before attempting a fresh connection
+            await self.device.disconnect()
             if await self.device.connect():
                 # Reset cooldown on success so next disconnect can reconnect immediately
                 self._last_warm_connect_attempt = None
@@ -159,9 +161,16 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         self._reconnect_task = self.hass.async_create_task(self._active_reconnect())
 
     async def _active_reconnect(self):
-        """Reconnect in active mode after unexpected disconnect."""
+        """Reconnect in active mode after unexpected disconnect.
+
+        Uses exponential backoff.  After exhausting fast retries the warm-
+        connect path (triggered by advertisements) will keep trying.
+        """
+        delay = self.device._active_reconnect_delay
         for attempt in range(self.device._max_retry_attempts):
-            await asyncio.sleep(self.device._active_reconnect_delay)
+            await asyncio.sleep(delay)
+            # Force-disconnect first to clear any stale adapter/bleak state
+            await self.device.disconnect()
             ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
             if not ble_device:
                 _LOGGER.debug(
@@ -169,16 +178,21 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                     attempt + 1,
                     self._name,
                 )
+                delay = min(delay * 2, 60)
                 continue
             self.device.set_ble_device(ble_device)
             if await self.device.connect():
-                _LOGGER.info(f"[Coordinator] Active mode reconnected to {self._name}")
+                _LOGGER.info("[Coordinator] Active mode reconnected to %s", self._name)
                 return
+            delay = min(delay * 2, 60)
         _LOGGER.warning(
-            "[Coordinator] Active mode reconnect failed for %s after %d attempts",
+            "[Coordinator] Active mode reconnect failed for %s after %d attempts, will retry on next advertisement",
             self._name,
             self.device._max_retry_attempts,
         )
+        # Reset cooldown so the next advertisement triggers an immediate
+        # warm-connect attempt instead of waiting 60 s.
+        self._last_warm_connect_attempt = None
 
     @callback
     def _needs_poll(self, service_info, seconds_since_last_poll):
@@ -280,6 +294,8 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         # Capture client ref to avoid race with _on_disconnected callback
         client = self.device.client
         if not client or not client.is_connected:
+            # Clear stale state before reconnecting
+            await self.device.disconnect()
             ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
             if not ble_device:
                 self._available = False
@@ -351,6 +367,11 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         self._available = False
         self._was_unavailable = True
         self.async_update_listeners()
+        # In active mode, schedule a reconnect so we recover automatically
+        # instead of staying unavailable until the next advertisement.
+        if self.device._active_mode and (not self._reconnect_task or self._reconnect_task.done()):
+            _LOGGER.info("[Coordinator] Scheduling reconnect for %s after command failure", self._name)
+            self._reconnect_task = self.hass.async_create_task(self._active_reconnect())
 
     async def async_set_position(self, position: int) -> None:
         """Set the cover position."""
