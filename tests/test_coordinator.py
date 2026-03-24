@@ -287,14 +287,14 @@ class TestWarmConnectMethod:
 
         assert mock_coordinator._last_warm_connect_attempt is None
 
-    async def test_warm_connect_failure_keeps_cooldown(self, mock_coordinator) -> None:
-        ts = datetime.now()
-        mock_coordinator._last_warm_connect_attempt = ts
+    async def test_warm_connect_failure_sets_cooldown(self, mock_coordinator) -> None:
+        mock_coordinator._last_warm_connect_attempt = None
         mock_coordinator.device.connect = AsyncMock(return_value=False)
 
         await mock_coordinator._warm_connect()
 
-        assert mock_coordinator._last_warm_connect_attempt == ts
+        # Failure should set cooldown to prevent rapid-fire retries
+        assert mock_coordinator._last_warm_connect_attempt is not None
 
     async def test_warm_connect_exception_does_not_raise(self, mock_coordinator) -> None:
         mock_coordinator.device.connect = AsyncMock(side_effect=Exception("BLE error"))
@@ -663,3 +663,95 @@ class TestCoverCommands:
         with patch.object(mock_coordinator, "_execute_command", new_callable=AsyncMock) as mock_exec:
             await mock_coordinator.async_close_cover()
         mock_exec.assert_not_awaited()
+
+
+# ===================================================================
+# Position notification handling
+# ===================================================================
+
+
+class TestPositionNotification:
+    def test_position_notification_updates_state(self, mock_coordinator) -> None:
+        """GATT notification should update position and mark available."""
+        mock_coordinator._available = False
+        mock_coordinator._initializing = True
+
+        mock_coordinator._handle_position_notification(75)
+
+        assert mock_coordinator._position == 75
+        assert mock_coordinator._available is True
+        assert mock_coordinator._initializing is False
+        mock_coordinator.async_update_listeners.assert_called()
+
+    def test_position_notification_while_available(self, mock_coordinator) -> None:
+        """Position notification on already-available device."""
+        mock_coordinator._available = True
+        mock_coordinator._initializing = False
+
+        mock_coordinator._handle_position_notification(25)
+
+        assert mock_coordinator._position == 25
+        mock_coordinator.async_update_listeners.assert_called()
+
+
+# ===================================================================
+# Slow reconnect loop
+# ===================================================================
+
+
+class TestSlowReconnectLoop:
+    async def test_slow_reconnect_exits_if_connected(self, mock_coordinator) -> None:
+        """Should stop looping when device is already connected."""
+        mock_coordinator.device._is_connected = True
+
+        with patch("custom_components.ryse.coordinator.asyncio.sleep", new_callable=AsyncMock):
+            await mock_coordinator._slow_reconnect_loop()
+
+    async def test_slow_reconnect_succeeds(self, mock_coordinator) -> None:
+        """Should connect and return on success."""
+        mock_coordinator.device._is_connected = False
+        mock_coordinator.device.connect = AsyncMock(return_value=True)
+
+        call_count = 0
+
+        async def sleep_side_effect(seconds):
+            nonlocal call_count
+            call_count += 1
+            # After sleep, mark not connected so the loop body runs
+            if call_count > 1:
+                raise AssertionError("Should not loop more than once on success")
+
+        with (
+            patch("custom_components.ryse.coordinator.asyncio.sleep", side_effect=sleep_side_effect),
+            patch(
+                "custom_components.ryse.coordinator.bluetooth.async_ble_device_from_address",
+                return_value=MagicMock(),
+            ),
+        ):
+            await mock_coordinator._slow_reconnect_loop()
+
+        assert mock_coordinator._last_warm_connect_attempt is None
+
+    async def test_slow_reconnect_retries_when_no_ble_device(self, mock_coordinator) -> None:
+        """Should continue looping when no BLE device is available."""
+        mock_coordinator.device._is_connected = False
+
+        call_count = 0
+
+        async def sleep_side_effect(seconds):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 3:
+                # After 3 attempts, simulate connection to break the loop
+                mock_coordinator.device._is_connected = True
+
+        with (
+            patch("custom_components.ryse.coordinator.asyncio.sleep", side_effect=sleep_side_effect),
+            patch(
+                "custom_components.ryse.coordinator.bluetooth.async_ble_device_from_address",
+                return_value=None,
+            ),
+        ):
+            await mock_coordinator._slow_reconnect_loop()
+
+        assert call_count == 3

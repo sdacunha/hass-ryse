@@ -44,6 +44,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         self._reconnect_task = None
         self._last_warm_connect_attempt = None
         self.device.add_disconnect_callback(self._handle_device_disconnected)
+        self.device.add_position_callback(self._handle_position_notification)
         # Start the initialization timer
         self.hass.async_create_task(self._async_init_timeout())
         # In active mode, establish connection on startup
@@ -106,7 +107,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                     seconds=60
                 ):
                     _LOGGER.info("[Coordinator] Active mode: reconnecting on advertisement for %s", self._name)
-                    self._last_warm_connect_attempt = now
+                    # Set cooldown AFTER attempt so failures don't block the next try
                     self.hass.async_create_task(self._warm_connect())
             else:
                 # Passive mode: don't warm-connect. Connect on-demand when a
@@ -123,8 +124,11 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             if await self.device.connect():
                 # Reset cooldown on success so next disconnect can reconnect immediately
                 self._last_warm_connect_attempt = None
+                return
         except Exception as e:
             _LOGGER.debug("[Coordinator] Warm connect failed for %s: %s", self._name, e)
+        # Set cooldown only on failure to prevent rapid-fire retries
+        self._last_warm_connect_attempt = datetime.now()
 
     @callback
     def _handle_unavailable(self, service_info):
@@ -147,6 +151,15 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         _LOGGER.warning(f"[Coordinator] _handle_unavailable called for {self._name} (address: {self.device.address})")
         self._available = False
         self._was_unavailable = True
+        self.async_update_listeners()
+
+    @callback
+    def _handle_position_notification(self, position: int):
+        """Handle real-time position update from GATT notification."""
+        self._position = position
+        self._available = True
+        if self._initializing:
+            self._initializing = False
         self.async_update_listeners()
 
     @callback
@@ -186,13 +199,40 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                 return
             delay = min(delay * 2, 60)
         _LOGGER.warning(
-            "[Coordinator] Active mode reconnect failed for %s after %d attempts, will retry on next advertisement",
+            "[Coordinator] Active mode reconnect failed for %s after %d attempts, scheduling slow retry",
             self._name,
             self.device._max_retry_attempts,
         )
         # Reset cooldown so the next advertisement triggers an immediate
         # warm-connect attempt instead of waiting 60 s.
         self._last_warm_connect_attempt = None
+        # Schedule a slow periodic retry in case no advertisements arrive
+        # (e.g. adapter is down). This keeps trying every 5 minutes until
+        # we reconnect or an advertisement-triggered warm connect succeeds.
+        self._reconnect_task = self.hass.async_create_task(self._slow_reconnect_loop())
+
+    async def _slow_reconnect_loop(self):
+        """Slow periodic reconnect when fast retries and advertisements both fail.
+
+        Tries every 5 minutes until connected. Stops if a warm-connect or
+        advertisement-triggered reconnect succeeds first.
+        """
+        while True:
+            await asyncio.sleep(300)  # 5 minutes
+            if self.device._is_connected:
+                _LOGGER.debug("[Coordinator] Slow reconnect loop: %s already connected, stopping", self._name)
+                return
+            _LOGGER.info("[Coordinator] Slow reconnect attempt for %s", self._name)
+            await self.device.disconnect()
+            ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
+            if not ble_device:
+                _LOGGER.debug("[Coordinator] Slow reconnect: no BLE device for %s, will retry", self._name)
+                continue
+            self.device.set_ble_device(ble_device)
+            if await self.device.connect():
+                _LOGGER.info("[Coordinator] Slow reconnect succeeded for %s", self._name)
+                self._last_warm_connect_attempt = None
+                return
 
     @callback
     def _needs_poll(self, service_info, seconds_since_last_poll):

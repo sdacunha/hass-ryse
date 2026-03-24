@@ -28,6 +28,7 @@ class RyseDevice:
         self._battery_callbacks = []
         self._unavailable_callbacks = []
         self._adv_callbacks = []
+        self._position_callbacks = []
         self._latest_battery = None
         self._battery_level = None
         self._is_connected = False
@@ -59,9 +60,46 @@ class RyseDevice:
         """Add a callback for unexpected disconnections."""
         self._disconnect_callbacks.append(callback)
 
+    def add_position_callback(self, callback):
+        """Add a callback for real-time position updates from GATT notifications."""
+        self._position_callbacks.append(callback)
+
     def get_battery_level(self) -> int | None:
         """Get the latest battery level."""
         return self._battery_level
+
+    def _handle_notification(self, _sender, data: bytearray):
+        """Handle GATT notifications from the RX characteristic.
+
+        Packet format (from RYSE protocol):
+          data[0] == 0xF5  (header)
+          data[2] == 0x01
+          data[3] == 0x07  → position report, position at data[4]
+          data[3] == 0x18  → user target report (ignore)
+        """
+        if len(data) < 5 or data[0] != 0xF5:
+            return
+        if len(data) >= 5 and data[2] == 0x01 and data[3] == 0x07:
+            position = data[4]
+            _LOGGER.debug("[%s] GATT notification: position=%d", self.address, position)
+            for cb in self._position_callbacks:
+                try:
+                    cb(position)
+                except Exception:
+                    _LOGGER.exception("[%s] Position callback error", self.address)
+            # Also extract battery if available (byte 5 in some firmware)
+            if len(data) >= 6:
+                battery = data[5]
+                if 0 <= battery <= 100:
+                    self._battery_level = battery
+                    for cb in self._battery_callbacks:
+                        try:
+                            if asyncio.iscoroutinefunction(cb):
+                                asyncio.ensure_future(cb(battery))
+                            else:
+                                cb(battery)
+                        except Exception:
+                            _LOGGER.exception("[%s] Battery callback error", self.address)
 
     def _on_disconnected(self, client: BleakClient):
         """Handle unexpected BLE disconnection."""
@@ -155,6 +193,12 @@ class RyseDevice:
                         # Non-fatal — some backends or devices don't support
                         # explicit pairing and work fine without it.
                         _LOGGER.debug(f"[{self.address}] BLE pair skipped: {pair_err}")
+                    # Subscribe to GATT notifications for real-time position updates
+                    try:
+                        await self.client.start_notify(POSITION_CHAR_UUID, self._handle_notification)
+                        _LOGGER.debug(f"[{self.address}] Subscribed to GATT notifications")
+                    except Exception as notify_err:
+                        _LOGGER.debug(f"[{self.address}] GATT notify subscription skipped: {notify_err}")
                     self._is_connected = True
                     self._connecting = False
                     self._schedule_idle_disconnect()

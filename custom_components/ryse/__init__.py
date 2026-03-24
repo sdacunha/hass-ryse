@@ -7,7 +7,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .ryse import RyseDevice
-from .coordinator import RyseCoordinator
 from .const import (
     DEFAULT_POLL_INTERVAL,
     DEFAULT_IDLE_DISCONNECT_TIMEOUT,
@@ -46,6 +45,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     device = RyseDevice(entry.data["address"])
     _apply_options(device, entry.options)
     _LOGGER.info("[init] Created RyseDevice (id: %s) for address: %s", id(device), entry.data["address"])
+
+    # Lazy import to avoid pulling in homeassistant.components.bluetooth at
+    # package load time (breaks tests on non-Linux / mismatched deps).
+    from .coordinator import RyseCoordinator
 
     # Create coordinator instance
     coordinator = RyseCoordinator(

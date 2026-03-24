@@ -85,6 +85,7 @@ def mock_ryse_device():
     device._unavailable_callbacks = []
     device._adv_callbacks = []
     device._disconnect_callbacks = []
+    device._position_callbacks = []
     device.connect = AsyncMock(return_value=True)
     device.disconnect = AsyncMock()
     device.set_position = AsyncMock()
@@ -97,6 +98,7 @@ def mock_ryse_device():
     device.add_battery_callback = MagicMock(side_effect=lambda cb: device._battery_callbacks.append(cb))
     device.add_unavailable_callback = MagicMock(side_effect=lambda cb: device._unavailable_callbacks.append(cb))
     device.add_adv_callback = MagicMock(side_effect=lambda cb: device._adv_callbacks.append(cb))
+    device.add_position_callback = MagicMock(side_effect=lambda cb: device._position_callbacks.append(cb))
     device.parse_advertisement = MagicMock(return_value={"position": 50, "battery": 85})
     device.poll_needed = MagicMock(return_value=False)
     return device

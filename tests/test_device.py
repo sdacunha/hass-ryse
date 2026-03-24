@@ -398,3 +398,83 @@ class TestPollNeeded:
     def test_poll_not_needed_when_recent(self, device) -> None:
         device._poll_interval = 300
         assert device.poll_needed(100) is False
+
+
+# ===================================================================
+# GATT notification handling
+# ===================================================================
+
+
+class TestGATTNotifications:
+    def test_position_notification(self, device) -> None:
+        """Valid position notification should call position callbacks."""
+        cb = MagicMock()
+        device.add_position_callback(cb)
+
+        # data[0]=0xF5, data[2]=0x01, data[3]=0x07, data[4]=position
+        data = bytearray([0xF5, 0x00, 0x01, 0x07, 42])
+        device._handle_notification(None, data)
+
+        cb.assert_called_once_with(42)
+
+    def test_non_position_notification_ignored(self, device) -> None:
+        """Non-position notification (e.g. user target) should be ignored."""
+        cb = MagicMock()
+        device.add_position_callback(cb)
+
+        # data[3]=0x18 is "user target", should be ignored
+        data = bytearray([0xF5, 0x00, 0x01, 0x18, 50])
+        device._handle_notification(None, data)
+
+        cb.assert_not_called()
+
+    def test_short_data_ignored(self, device) -> None:
+        """Data shorter than 5 bytes should be ignored."""
+        cb = MagicMock()
+        device.add_position_callback(cb)
+
+        device._handle_notification(None, bytearray([0xF5, 0x00]))
+
+        cb.assert_not_called()
+
+    def test_wrong_header_ignored(self, device) -> None:
+        """Data with wrong header should be ignored."""
+        cb = MagicMock()
+        device.add_position_callback(cb)
+
+        data = bytearray([0xAA, 0x00, 0x01, 0x07, 42])
+        device._handle_notification(None, data)
+
+        cb.assert_not_called()
+
+    def test_notification_with_battery(self, device) -> None:
+        """Notification with battery byte should update battery."""
+        pos_cb = MagicMock()
+        bat_cb = MagicMock()
+        device.add_position_callback(pos_cb)
+        device.add_battery_callback(bat_cb)
+
+        data = bytearray([0xF5, 0x00, 0x01, 0x07, 50, 85])
+        device._handle_notification(None, data)
+
+        pos_cb.assert_called_once_with(50)
+        bat_cb.assert_called_once_with(85)
+        assert device._battery_level == 85
+
+    def test_notification_callback_error_doesnt_crash(self, device) -> None:
+        """A failing callback should not crash the notification handler."""
+        bad_cb = MagicMock(side_effect=Exception("boom"))
+        good_cb = MagicMock()
+        device.add_position_callback(bad_cb)
+        device.add_position_callback(good_cb)
+
+        data = bytearray([0xF5, 0x00, 0x01, 0x07, 42])
+        device._handle_notification(None, data)
+
+        bad_cb.assert_called_once_with(42)
+        good_cb.assert_called_once_with(42)
+
+    def test_add_position_callback(self, device) -> None:
+        cb = MagicMock()
+        device.add_position_callback(cb)
+        assert cb in device._position_callbacks
