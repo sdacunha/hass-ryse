@@ -3,6 +3,11 @@ import asyncio
 from bleak import BleakClient
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import establish_connection, BleakNotFoundError
+
+try:
+    from bleak_retry_connector import BleakOutOfConnectionSlotsError
+except ImportError:
+    BleakOutOfConnectionSlotsError = None
 from .const import (
     HARDCODED_UUIDS,
     DEFAULT_IDLE_DISCONNECT_TIMEOUT,
@@ -210,7 +215,13 @@ class RyseDevice:
             except asyncio.TimeoutError:
                 _LOGGER.warning(f"[{self.address}] Connection timed out")
             except Exception as e:
-                _LOGGER.error(f"[{self.address}] Connection failed: {type(e).__name__}: {e}")
+                if BleakOutOfConnectionSlotsError and isinstance(e, BleakOutOfConnectionSlotsError):
+                    _LOGGER.warning(
+                        f"[{self.address}] ESPHome proxy out of connection slots — "
+                        "add more proxies or reduce active mode devices"
+                    )
+                else:
+                    _LOGGER.error(f"[{self.address}] Connection failed: {type(e).__name__}: {e}")
 
             # Connection failed
             _LOGGER.error(f"[{self.address}] Connection attempts failed")
