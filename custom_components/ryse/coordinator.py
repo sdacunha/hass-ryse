@@ -35,16 +35,18 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         self._initializing = True
         self._ready_event = asyncio.Event()
         self._was_unavailable = True
+        self._reconnect_task = None
+        self._last_warm_connect_attempt = None
+        self.device.add_disconnect_callback(self._handle_device_disconnected)
+        self.device.add_position_callback(self._handle_position_notification)
+        # Register callbacks AFTER all attributes are initialized — HA may
+        # fire the callback immediately with cached advertisement data.
         self._unavailable_cancel = bluetooth.async_track_unavailable(
             hass, self._handle_unavailable, address, connectable=True
         )
         self._adv_cancel = bluetooth.async_register_callback(
             hass, self._handle_adv, {"address": address}, bluetooth.BluetoothScanningMode.PASSIVE
         )
-        self._reconnect_task = None
-        self._last_warm_connect_attempt = None
-        self.device.add_disconnect_callback(self._handle_device_disconnected)
-        self.device.add_position_callback(self._handle_position_notification)
         # Start the initialization timer
         self.hass.async_create_task(self._async_init_timeout())
         # In active mode, establish connection on startup
