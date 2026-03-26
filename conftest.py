@@ -7,6 +7,9 @@ transitively imports coordinator.py fails with an ImportError.
 
 By injecting a stub module into sys.modules *before* pytest collects test
 files, the real (broken) import never runs and coordinator.py loads cleanly.
+
+On CI (Linux with correct deps), the real module loads fine and we skip
+the stub entirely.
 """
 
 from __future__ import annotations
@@ -17,10 +20,22 @@ from unittest.mock import MagicMock
 
 
 def _stub_bluetooth_module():
-    """Insert a fake homeassistant.components.bluetooth into sys.modules."""
+    """Insert a fake homeassistant.components.bluetooth into sys.modules.
+
+    Only activates when the real module fails to import — avoids breaking
+    CI where the full HA bluetooth stack is available.
+    """
     key = "homeassistant.components.bluetooth"
     if key in sys.modules:
         return  # Already loaded (or already stubbed)
+
+    # Try importing the real module first
+    try:
+        import homeassistant.components.bluetooth  # noqa: F401
+
+        return  # Real module loaded successfully — nothing to do
+    except (ImportError, Exception):
+        pass  # Real module broken — fall through to stub
 
     mod = ModuleType(key)
 
