@@ -69,7 +69,7 @@ def mock_coordinator(hass: HomeAssistant, mock_ryse_device):
 
 
 class TestAdvertisementHandling:
-    """Tests for _handle_adv callback."""
+    """Tests for _async_handle_bluetooth_event callback."""
 
     def test_adv_updates_position_and_battery(self, mock_coordinator) -> None:
         """Advertisement with valid data should update position and battery."""
@@ -80,7 +80,7 @@ class TestAdvertisementHandling:
         service_info = MagicMock()
         service_info.device = MagicMock()
 
-        mock_coordinator._handle_adv(service_info, MagicMock())
+        mock_coordinator._async_handle_bluetooth_event(service_info, MagicMock())
 
         assert mock_coordinator._position == 50
         assert mock_coordinator._battery == 85
@@ -94,7 +94,7 @@ class TestAdvertisementHandling:
             "battery": 72,
         }
 
-        mock_coordinator._handle_adv(MagicMock(), MagicMock())
+        mock_coordinator._async_handle_bluetooth_event(MagicMock(), MagicMock())
 
         mock_coordinator._ready_event.set.assert_called_once()
 
@@ -104,7 +104,7 @@ class TestAdvertisementHandling:
             "battery": 72,
         }
 
-        mock_coordinator._handle_adv(MagicMock(), MagicMock())
+        mock_coordinator._async_handle_bluetooth_event(MagicMock(), MagicMock())
 
         mock_coordinator._ready_event.set.assert_not_called()
 
@@ -117,7 +117,7 @@ class TestAdvertisementHandling:
             "battery": 90,
         }
 
-        mock_coordinator._handle_adv(MagicMock(), MagicMock())
+        mock_coordinator._async_handle_bluetooth_event(MagicMock(), MagicMock())
 
         mock_cb.assert_called_once_with(90)
 
@@ -130,7 +130,7 @@ class TestAdvertisementHandling:
             "battery": 90,
         }
 
-        mock_coordinator._handle_adv(MagicMock(), MagicMock())
+        mock_coordinator._async_handle_bluetooth_event(MagicMock(), MagicMock())
 
         mock_cb.assert_called_once()
 
@@ -143,7 +143,7 @@ class TestAdvertisementHandling:
             "battery": 85,
         }
 
-        mock_coordinator._handle_adv(service_info, MagicMock())
+        mock_coordinator._async_handle_bluetooth_event(service_info, MagicMock())
 
         mock_coordinator.device.set_ble_device.assert_called_once_with(service_info.device)
 
@@ -155,7 +155,7 @@ class TestAdvertisementHandling:
             "battery": 85,
         }
 
-        mock_coordinator._handle_adv(MagicMock(), MagicMock())
+        mock_coordinator._async_handle_bluetooth_event(MagicMock(), MagicMock())
 
         assert mock_coordinator._was_unavailable is False
         assert mock_coordinator._available is True
@@ -167,7 +167,7 @@ class TestAdvertisementHandling:
 
 
 class TestWarmConnect:
-    """Tests for warm connect logic in _handle_adv."""
+    """Tests for warm connect logic in _async_handle_bluetooth_event."""
 
     def test_passive_mode_no_warm_connect(self, mock_coordinator) -> None:
         """Passive mode should never warm connect."""
@@ -180,7 +180,7 @@ class TestWarmConnect:
         }
 
         with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
-            mock_coordinator._handle_adv(MagicMock(), MagicMock())
+            mock_coordinator._async_handle_bluetooth_event(MagicMock(), MagicMock())
 
         # Should NOT schedule warm connect in passive mode
         for call in mock_task.call_args_list:
@@ -198,7 +198,7 @@ class TestWarmConnect:
         }
 
         with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
-            mock_coordinator._handle_adv(MagicMock(), MagicMock())
+            mock_coordinator._async_handle_bluetooth_event(MagicMock(), MagicMock())
 
         # Should schedule warm connect
         assert mock_task.called
@@ -215,7 +215,7 @@ class TestWarmConnect:
         }
 
         with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
-            mock_coordinator._handle_adv(MagicMock(), MagicMock())
+            mock_coordinator._async_handle_bluetooth_event(MagicMock(), MagicMock())
 
         # Should NOT warm connect (cooldown not expired)
         for call in mock_task.call_args_list:
@@ -233,7 +233,7 @@ class TestWarmConnect:
         }
 
         with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
-            mock_coordinator._handle_adv(MagicMock(), MagicMock())
+            mock_coordinator._async_handle_bluetooth_event(MagicMock(), MagicMock())
 
         assert mock_task.called
 
@@ -250,7 +250,7 @@ class TestWarmConnect:
         }
 
         with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
-            mock_coordinator._handle_adv(MagicMock(), MagicMock())
+            mock_coordinator._async_handle_bluetooth_event(MagicMock(), MagicMock())
 
         # async_create_task should only be called for callbacks, not warm connect
         # If it was called, it should not be for _warm_connect
@@ -267,7 +267,7 @@ class TestWarmConnect:
         }
 
         with patch.object(mock_coordinator.hass, "async_create_task", side_effect=_close_coro) as mock_task:
-            mock_coordinator._handle_adv(MagicMock(), MagicMock())
+            mock_coordinator._async_handle_bluetooth_event(MagicMock(), MagicMock())
 
         for call in mock_task.call_args_list:
             assert "_warm_connect" not in str(call)
@@ -411,31 +411,23 @@ class TestAsyncUpdate:
 
 
 class TestUnavailableHandling:
-    def test_handle_unavailable_recent_adv_keeps_available(self, mock_coordinator) -> None:
-        """If we received an adv recently, stay available."""
+    def test_async_handle_unavailable_marks_unavailable(self, mock_coordinator) -> None:
+        """Callback always marks unavailable — HA's availability tracker
+        already applies the fallback interval before calling us."""
         mock_coordinator._last_adv = datetime.now()
         mock_coordinator._available = True
 
-        mock_coordinator._handle_unavailable(MagicMock())
-
-        assert mock_coordinator._available is True
-
-    def test_handle_unavailable_old_adv_marks_unavailable(self, mock_coordinator) -> None:
-        """If last adv is old (>15min), mark unavailable."""
-        mock_coordinator._last_adv = datetime.now() - timedelta(minutes=20)
-        mock_coordinator._available = True
-
-        mock_coordinator._handle_unavailable(MagicMock())
+        mock_coordinator._async_handle_unavailable(MagicMock())
 
         assert mock_coordinator._available is False
         assert mock_coordinator._was_unavailable is True
 
-    def test_handle_unavailable_no_adv_marks_unavailable(self, mock_coordinator) -> None:
+    def test_async_handle_unavailable_no_adv_marks_unavailable(self, mock_coordinator) -> None:
         """If we never received an adv, mark unavailable."""
         mock_coordinator._last_adv = None
         mock_coordinator._available = True
 
-        mock_coordinator._handle_unavailable(MagicMock())
+        mock_coordinator._async_handle_unavailable(MagicMock())
 
         assert mock_coordinator._available is False
 

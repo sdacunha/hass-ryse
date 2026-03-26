@@ -47,6 +47,9 @@ def _stub_bluetooth_module():
     mod.async_discovered_service_info = MagicMock(return_value=[])
     mod.async_track_unavailable = MagicMock(return_value=MagicMock())
     mod.async_register_callback = MagicMock(return_value=MagicMock())
+    mod.async_scanner_count = MagicMock(return_value=1)
+    mod.async_set_fallback_availability_interval = MagicMock()
+    mod.async_rediscover_address = MagicMock()
 
     # ActiveBluetoothDataUpdateCoordinator lives in a sub-module
     auc_key = f"{key}.active_update_coordinator"

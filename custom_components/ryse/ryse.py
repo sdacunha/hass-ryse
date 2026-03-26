@@ -50,6 +50,7 @@ class RyseDevice:
         self._idle_disconnect_timeout = DEFAULT_IDLE_DISCONNECT_TIMEOUT
         self._active_mode = DEFAULT_ACTIVE_MODE
         self._active_reconnect_delay = DEFAULT_ACTIVE_RECONNECT_DELAY
+        self._ble_device_callback = None  # Set by coordinator for fresh BLEDevice on retries
 
     def add_battery_callback(self, callback):
         """Add a callback for battery updates."""
@@ -174,6 +175,7 @@ class RyseDevice:
                     max_attempts=self._max_retry_attempts,
                     timeout=self._connection_timeout,
                     disconnected_callback=self._on_disconnected,
+                    ble_device_callback=self._ble_device_callback,
                 )
 
                 if self.client.is_connected:

@@ -78,8 +78,8 @@ class BleAuthFailedRepairFlow(RepairsFlow):
                         BleakClient,
                         scanner_device.ble_device,
                         address,
-                        max_attempts=2,
-                        timeout=15.0,
+                        max_attempts=1,
+                        timeout=10.0,
                     )
                     if client.is_connected:
                         try:

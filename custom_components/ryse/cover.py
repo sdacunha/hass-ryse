@@ -8,6 +8,9 @@ import logging
 
 _LOGGER = logging.getLogger(__name__)
 
+# BLE devices can only handle one command at a time
+PARALLEL_UPDATES = 1
+
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]

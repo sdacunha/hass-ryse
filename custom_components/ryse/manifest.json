@@ -21,7 +21,8 @@
   "bluetooth": [
     {
       "local_name": "RZSS*",
-      "manufacturer_id": 1033
+      "manufacturer_id": 1033,
+      "connectable": false
     }
   ],
   "supported_platforms": [

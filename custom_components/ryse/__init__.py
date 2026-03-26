@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
     async_ble_device_from_address,
     async_scanner_devices_by_address,
@@ -112,8 +114,8 @@ async def async_setup(hass: HomeAssistant, config: dict):
                     BleakClient,
                     scanner_device.ble_device,
                     address,
-                    max_attempts=2,
-                    timeout=15.0,
+                    max_attempts=1,
+                    timeout=10.0,
                 )
                 if client.is_connected:
                     try:
@@ -155,8 +157,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up RYSE from a config entry."""
     _LOGGER.info("Setting up RYSE entry: %s", entry.data)
 
+    address = entry.data["address"]
+
+    # Verify at least one connectable Bluetooth scanner is available
+    if not bluetooth.async_scanner_count(hass, connectable=True):
+        raise ConfigEntryNotReady("No connectable Bluetooth adapters or proxies available")
+
+    # Clean up any stale connections left from a previous session
+    try:
+        from bleak_retry_connector import close_stale_connections_by_address
+
+        await close_stale_connections_by_address(address)
+    except ImportError:
+        pass  # Older bleak-retry-connector without this API
+
     # Create device instance
-    device = RyseDevice(entry.data["address"])
+    device = RyseDevice(address)
     _apply_options(device, entry.options)
     _LOGGER.info("[init] Created RyseDevice (id: %s) for address: %s", id(device), entry.data["address"])
 
@@ -178,6 +194,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Set up platforms
     await hass.config_entries.async_forward_entry_setups(entry, ["cover", "sensor"])
+
+    # Start the coordinator AFTER platforms have subscribed.
+    # async_start() returns a cancel callback that cleans up all registrations.
+    entry.async_on_unload(coordinator.async_start())
 
     return True
 
@@ -201,14 +221,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     _LOGGER.debug("Unloading RYSE entry: %s", entry.data)
 
-    # Unload platforms
     unload_ok = await hass.config_entries.async_unload_platforms(entry, ["cover", "sensor"])
 
     if unload_ok:
-        # Clean up coordinator and device
         coordinator = hass.data[DOMAIN].pop(entry.entry_id)
-        # Disconnect the device if connected
+        coordinator._cancel_reconnect_task()
         await coordinator.device.disconnect()
-        _LOGGER.debug("Disconnected device during unload: %s", entry.data["address"])
+        # Allow the address to be rediscovered without restart
+        bluetooth.async_rediscover_address(hass, entry.data["address"])
+        _LOGGER.debug("Unloaded RYSE device: %s", entry.data["address"])
 
     return unload_ok
