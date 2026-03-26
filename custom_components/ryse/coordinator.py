@@ -12,11 +12,6 @@ from .const import DOMAIN, HARDCODED_UUIDS, DEFAULT_INIT_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
 
-# Global semaphore to limit concurrent BLE connection attempts across all
-# RYSE devices.  Prevents reconnect storms from saturating ESPHome proxy
-# slots when multiple devices disconnect at the same time.
-_CONNECTION_SEMAPHORE = asyncio.Semaphore(1)
-
 
 class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, address: str, device: RyseDevice, name: str, entry_id: str | None = None):
@@ -123,7 +118,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
 
     async def _warm_connect(self):
         """Proactively connect after hearing an advertisement."""
-        async with _CONNECTION_SEMAPHORE:
+        async with self.device._connection_semaphore:
             try:
                 # Clear any stale state before attempting a fresh connection
                 await self.device.disconnect()
@@ -188,7 +183,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         delay = self.device._active_reconnect_delay
         for attempt in range(self.device._max_retry_attempts):
             await asyncio.sleep(delay)
-            async with _CONNECTION_SEMAPHORE:
+            async with self.device._connection_semaphore:
                 # Force-disconnect first to clear any stale adapter/bleak state
                 await self.device.disconnect()
                 ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
@@ -229,7 +224,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             if self.device._is_connected:
                 _LOGGER.debug("[Coordinator] Slow reconnect loop: %s already connected, stopping", self._name)
                 return
-            async with _CONNECTION_SEMAPHORE:
+            async with self.device._connection_semaphore:
                 _LOGGER.info("[Coordinator] Slow reconnect attempt for %s", self._name)
                 await self.device.disconnect()
                 ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
@@ -342,7 +337,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         # Capture client ref to avoid race with _on_disconnected callback
         client = self.device.client
         if not client or not client.is_connected:
-            async with _CONNECTION_SEMAPHORE:
+            async with self.device._connection_semaphore:
                 # Clear stale state before reconnecting
                 await self.device.disconnect()
                 ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)

@@ -38,6 +38,7 @@ class RyseDevice:
         self._battery_level = None
         self._is_connected = False
         self._connection_lock = asyncio.Lock()
+        self._connection_semaphore = asyncio.Semaphore(1)
         self._connecting = False
         self._idle_timer = None
         self._disconnect_callbacks = []
