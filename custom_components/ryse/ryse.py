@@ -92,19 +92,6 @@ class RyseDevice:
                     cb(position)
                 except Exception:
                     _LOGGER.exception("[%s] Position callback error", self.address)
-            # Also extract battery if available (byte 5 in some firmware)
-            if len(data) >= 6:
-                battery = data[5]
-                if 0 <= battery <= 100:
-                    self._battery_level = battery
-                    for cb in self._battery_callbacks:
-                        try:
-                            if asyncio.iscoroutinefunction(cb):
-                                asyncio.ensure_future(cb(battery))
-                            else:
-                                cb(battery)
-                        except Exception:
-                            _LOGGER.exception("[%s] Battery callback error", self.address)
 
     def _on_disconnected(self, client: BleakClient):
         """Handle unexpected BLE disconnection."""

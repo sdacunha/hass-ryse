@@ -447,19 +447,20 @@ class TestGATTNotifications:
 
         cb.assert_not_called()
 
-    def test_notification_with_battery(self, device) -> None:
-        """Notification with battery byte should update battery."""
+    def test_notification_ignores_trailing_bytes(self, device) -> None:
+        """Extra bytes (checksum, etc.) should not be interpreted as battery."""
         pos_cb = MagicMock()
         bat_cb = MagicMock()
         device.add_position_callback(pos_cb)
         device.add_battery_callback(bat_cb)
 
-        data = bytearray([0xF5, 0x00, 0x01, 0x07, 50, 85])
+        # data[5] = 1 (checksum), should NOT be treated as battery
+        data = bytearray([0xF5, 0x00, 0x01, 0x07, 50, 1])
         device._handle_notification(None, data)
 
         pos_cb.assert_called_once_with(50)
-        bat_cb.assert_called_once_with(85)
-        assert device._battery_level == 85
+        bat_cb.assert_not_called()
+        assert device._battery_level is None
 
     def test_notification_callback_error_doesnt_crash(self, device) -> None:
         """A failing callback should not crash the notification handler."""
