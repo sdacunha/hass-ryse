@@ -5,10 +5,15 @@ from __future__ import annotations
 import logging
 
 from homeassistant import data_entry_flow
-from homeassistant.components.bluetooth import async_ble_device_from_address
+from homeassistant.components.bluetooth import (
+    async_ble_device_from_address,
+    async_scanner_devices_by_address,
+)
 from homeassistant.components.repairs import RepairsFlow
 from homeassistant.helpers import issue_registry as ir
 
+from bleak import BleakClient
+from bleak_retry_connector import establish_connection
 
 from .const import DOMAIN
 
@@ -25,7 +30,7 @@ class BleAuthFailedRepairFlow(RepairsFlow):
         return self.async_show_form(step_id="init")
 
     async def async_step_repair(self, user_input=None) -> data_entry_flow.FlowResult:
-        """Attempt to reconnect and re-pair the BLE device."""
+        """Attempt to reconnect and re-pair the BLE device on all proxies."""
         # Extract the address from the issue ID: "ble_auth_failed_{address}"
         address = self.issue_id.removeprefix("ble_auth_failed_")
 
@@ -51,16 +56,54 @@ class BleAuthFailedRepairFlow(RepairsFlow):
             # Disconnect any stale connection
             await coordinator.device.disconnect()
 
-            # Establish a fresh connection
+            # Establish a fresh connection and pair on primary proxy
             if not await coordinator.device.connect():
                 return self.async_abort(reason="cannot_connect")
 
-            # Re-pair
             await coordinator.device.client.pair()
-            _LOGGER.info("[Repairs] Successfully re-paired %s", address)
+            _LOGGER.info("[Repairs] Successfully re-paired %s on primary proxy", address)
+            await coordinator.device.disconnect()
+
+            # Bond with all other proxies that can reach this device
+            scanner_devices = async_scanner_devices_by_address(self.hass, address, connectable=True)
+            _LOGGER.info(
+                "[Repairs] Found %d proxy/adapter(s) for %s — bonding with each",
+                len(scanner_devices),
+                address,
+            )
+            for scanner_device in scanner_devices:
+                source = getattr(scanner_device.scanner, "source", "unknown")
+                try:
+                    client = await establish_connection(
+                        BleakClient,
+                        scanner_device.ble_device,
+                        address,
+                        max_attempts=2,
+                        timeout=15.0,
+                    )
+                    if client.is_connected:
+                        try:
+                            await client.pair()
+                            _LOGGER.info("[Repairs] Bonded %s via proxy %s", address, source)
+                        except Exception as pair_err:
+                            _LOGGER.warning(
+                                "[Repairs] pair() failed on proxy %s for %s: %s",
+                                source,
+                                address,
+                                pair_err,
+                            )
+                        await client.disconnect()
+                except Exception as e:
+                    _LOGGER.warning(
+                        "[Repairs] Could not bond %s via proxy %s: %s",
+                        address,
+                        source,
+                        e,
+                    )
 
             # Clear the repair issue
             ir.async_delete_issue(self.hass, DOMAIN, self.issue_id)
+            coordinator.device._needs_repair = False
 
             return self.async_create_entry(data={})
 

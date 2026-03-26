@@ -10,3 +10,17 @@ send_raw_data:
     data:
       description: "Data to send in hex format"
       example: "01020304"
+test_ble_connection:
+  description: "Test if a shade accepts BLE connections and GATT reads without pairing. Logs results to help diagnose bonding requirements."
+  fields:
+    address:
+      description: "BLE MAC address of the shade to test"
+      example: "D8:02:6C:06:9C:32"
+      required: true
+bond_all_proxies:
+  description: "Bond a shade with every ESPHome proxy that can reach it. Put the shade in pairing mode first."
+  fields:
+    address:
+      description: "BLE MAC address of the shade to bond"
+      example: "D8:02:6C:06:9C:32"
+      required: true

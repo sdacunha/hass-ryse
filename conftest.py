@@ -39,10 +39,12 @@ def _stub_bluetooth_module():
 
     mod = ModuleType(key)
 
-    # Attributes used by coordinator.py at import time
+    # Attributes used by coordinator.py and __init__.py at import time
     mod.BluetoothScanningMode = MagicMock()
     mod.BluetoothServiceInfoBleak = MagicMock()
     mod.async_ble_device_from_address = MagicMock()
+    mod.async_scanner_devices_by_address = MagicMock(return_value=[])
+    mod.async_discovered_service_info = MagicMock(return_value=[])
     mod.async_track_unavailable = MagicMock(return_value=MagicMock())
     mod.async_register_callback = MagicMock(return_value=MagicMock())
 

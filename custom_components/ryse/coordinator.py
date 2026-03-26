@@ -350,6 +350,17 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                 if not await self.device.connect():
                     self._available = False
                     self._was_unavailable = True
+                    if self.device._needs_repair:
+                        self.device._needs_repair = False
+                        ir.async_create_issue(
+                            self.hass,
+                            DOMAIN,
+                            f"ble_auth_failed_{self.address}",
+                            is_fixable=True,
+                            severity=ir.IssueSeverity.ERROR,
+                            translation_key="ble_auth_failed",
+                            translation_placeholders={"name": self._name},
+                        )
                     self.async_update_listeners()
                     return False
         return True

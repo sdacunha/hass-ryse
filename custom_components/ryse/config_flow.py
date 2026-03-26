@@ -7,6 +7,7 @@ from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_ble_device_from_address,
     async_discovered_service_info,
+    async_scanner_devices_by_address,
 )
 from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.core import callback
@@ -236,7 +237,18 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     e,
                 )
 
+            # Pair on this proxy to establish bonding keys
+            try:
+                await client.pair()
+                _LOGGER.info("Paired with device on primary proxy: %s", address)
+            except Exception as e:
+                _LOGGER.warning("Pairing on primary proxy failed (may not be required): %s", e)
+
             await client.disconnect()
+
+            # Bond with all other proxies that can reach this device
+            await self._bond_all_proxies(address)
+
         except Exception as e:
             _LOGGER.error("Failed to pair with RYSE device %s: %s", address, e)
             return self.async_abort(reason="pairing_failed")
@@ -247,6 +259,49 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             "tx_uuid": HARDCODED_UUIDS["tx_uuid"],
         }
         return await self.async_step_name()
+
+    async def _bond_all_proxies(self, address: str) -> None:
+        """Bond the shade with every ESPHome proxy that can reach it.
+
+        Each proxy stores bonding keys independently.  By pairing through
+        each one during setup, HA can route connections through any proxy
+        without hitting 'Insufficient authentication' errors.
+        """
+        scanner_devices = async_scanner_devices_by_address(self.hass, address, connectable=True)
+        _LOGGER.info(
+            "[ConfigFlow] Found %d proxy/adapter(s) that can reach %s — bonding with each",
+            len(scanner_devices),
+            address,
+        )
+        for scanner_device in scanner_devices:
+            source = getattr(scanner_device.scanner, "source", "unknown")
+            try:
+                client = await establish_connection(
+                    BleakClient,
+                    scanner_device.ble_device,
+                    address,
+                    max_attempts=2,
+                    timeout=15.0,
+                )
+                if client.is_connected:
+                    try:
+                        await client.pair()
+                        _LOGGER.info("[ConfigFlow] Bonded %s via proxy %s", address, source)
+                    except Exception as pair_err:
+                        _LOGGER.warning(
+                            "[ConfigFlow] pair() failed on proxy %s for %s: %s (may already be bonded)",
+                            source,
+                            address,
+                            pair_err,
+                        )
+                    await client.disconnect()
+            except Exception as e:
+                _LOGGER.warning(
+                    "[ConfigFlow] Could not bond %s via proxy %s: %s",
+                    address,
+                    source,
+                    e,
+                )
 
     async def async_step_name(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
