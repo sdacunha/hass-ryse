@@ -68,14 +68,9 @@ class TestSetupEntry:
 
         with (
             patch(
-                "custom_components.ryse.RyseCoordinator",
+                "custom_components.ryse.coordinator.RyseCoordinator",
             ) as mock_coord_cls,
-            patch(
-                "custom_components.ryse.hass.config_entries.async_forward_entry_setups",
-                new_callable=AsyncMock,
-            )
-            if False
-            else patch.object(
+            patch.object(
                 hass.config_entries,
                 "async_forward_entry_setups",
                 new_callable=AsyncMock,
