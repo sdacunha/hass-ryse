@@ -161,45 +161,64 @@ class RyseDevice:
                 self._connecting = False
                 raise ConnectionError("No BLEDevice available for connection")
 
-            try:
-                _LOGGER.info(
-                    f"[{self.address}] Connecting via bleak-retry-connector (max_attempts={self._max_retry_attempts})"
-                )
-
-                self.client = await establish_connection(
-                    BleakClient,
-                    self.ble_device,
-                    self.address,
-                    max_attempts=self._max_retry_attempts,
-                    timeout=self._connection_timeout,
-                    disconnected_callback=self._on_disconnected,
-                )
-
-                if self.client.is_connected:
-                    # Subscribe to GATT notifications for real-time position updates
-                    try:
-                        await self.client.start_notify(POSITION_CHAR_UUID, self._handle_notification)
-                        _LOGGER.debug(f"[{self.address}] Subscribed to GATT notifications")
-                    except Exception as notify_err:
-                        _LOGGER.debug(f"[{self.address}] GATT notify subscription skipped: {notify_err}")
-                    self._is_connected = True
-                    self._connecting = False
-                    self._schedule_idle_disconnect()
-                    _LOGGER.info(f"[{self.address}] Successfully connected")
-                    return True
-
-            except BleakNotFoundError:
-                _LOGGER.warning(f"[{self.address}] Device not found")
-            except asyncio.TimeoutError:
-                _LOGGER.warning(f"[{self.address}] Connection timed out")
-            except Exception as e:
-                if BleakOutOfConnectionSlotsError and isinstance(e, BleakOutOfConnectionSlotsError):
-                    _LOGGER.warning(
-                        f"[{self.address}] ESPHome proxy out of connection slots — "
-                        "add more proxies or reduce active mode devices"
+            for connect_attempt in range(2):
+                try:
+                    _LOGGER.info(
+                        f"[{self.address}] Connecting via bleak-retry-connector (max_attempts={self._max_retry_attempts})"
                     )
-                else:
-                    _LOGGER.error(f"[{self.address}] Connection failed: {type(e).__name__}: {e}")
+
+                    self.client = await establish_connection(
+                        BleakClient,
+                        self.ble_device,
+                        self.address,
+                        max_attempts=self._max_retry_attempts,
+                        timeout=self._connection_timeout,
+                        disconnected_callback=self._on_disconnected,
+                    )
+
+                    if self.client.is_connected:
+                        # Subscribe to GATT notifications for real-time position updates
+                        try:
+                            await self.client.start_notify(POSITION_CHAR_UUID, self._handle_notification)
+                            _LOGGER.debug(f"[{self.address}] Subscribed to GATT notifications")
+                        except Exception as notify_err:
+                            _LOGGER.debug(f"[{self.address}] GATT notify subscription skipped: {notify_err}")
+                        self._is_connected = True
+                        self._connecting = False
+                        self._schedule_idle_disconnect()
+                        _LOGGER.info(f"[{self.address}] Successfully connected")
+                        return True
+
+                except BleakNotFoundError:
+                    _LOGGER.warning(f"[{self.address}] Device not found")
+                    break  # No point retrying if device isn't found
+                except asyncio.TimeoutError:
+                    _LOGGER.warning(f"[{self.address}] Connection timed out")
+                    break
+                except Exception as e:
+                    if BleakOutOfConnectionSlotsError and isinstance(e, BleakOutOfConnectionSlotsError):
+                        _LOGGER.warning(
+                            f"[{self.address}] ESPHome proxy out of connection slots — "
+                            "add more proxies or reduce active mode devices"
+                        )
+                        break
+                    # Insufficient authentication: proxy lost bonding keys.
+                    # Try to pair with a raw BleakClient, then retry establish_connection.
+                    if "Insufficient authentication" in str(e) and connect_attempt == 0:
+                        _LOGGER.warning(f"[{self.address}] Insufficient auth — attempting BLE pair")
+                        try:
+                            raw_client = BleakClient(self.ble_device, timeout=self._connection_timeout)
+                            await raw_client.connect()
+                            await raw_client.pair()
+                            await raw_client.disconnect()
+                            _LOGGER.info(f"[{self.address}] BLE pair successful, retrying connection")
+                            continue  # Retry establish_connection with fresh bonding keys
+                        except Exception as pair_err:
+                            _LOGGER.error(f"[{self.address}] BLE pair failed: {pair_err}")
+                            break
+                    else:
+                        _LOGGER.error(f"[{self.address}] Connection failed: {type(e).__name__}: {e}")
+                        break
 
             # Connection failed
             _LOGGER.error(f"[{self.address}] Connection attempts failed")
