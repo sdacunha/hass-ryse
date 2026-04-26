@@ -16,7 +16,7 @@ This is a complete rewrite of the RYSE Home Assistant integration, inspired by [
    - Go to HACS > Integrations
    - Click the three dots in the top right
    - Click "Custom repositories"
-   - Add `https://github.com/sdacunha/ryse` as a repository
+   - Add `https://github.com/sdacunha/hass-ryse` as a repository
    - Select "Integration" as the category
 3. Click the "Download" button for the RYSE integration
 4. Restart Home Assistant
