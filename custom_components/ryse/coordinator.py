@@ -421,12 +421,28 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                             await self.device.disconnect()
                             if not await self._ensure_connected():
                                 continue
+                        # Clear any stale bond on the proxy first; without
+                        # the user pressing PAIR, this is the only thing
+                        # that can recover an auth failure caused by an
+                        # out-of-sync LTK.
+                        try:
+                            await self.device.client.unpair()
+                        except Exception as unpair_err:
+                            _LOGGER.debug(
+                                "[Coordinator] %s: unpair() returned %s",
+                                self._name,
+                                unpair_err,
+                            )
                         await self.device.client.pair()
                         _LOGGER.info("[Coordinator] %s: BLE re-pair successful", self._name)
                         continue
                     except Exception as pair_err:
-                        _LOGGER.error(
-                            "[Coordinator] %s: BLE re-pair failed: %s",
+                        # Expected to fail when the device is not in pairing
+                        # mode — only the user pressing PAIR can recover. Log
+                        # at debug to keep the user-visible log clean; the
+                        # repair issue below surfaces the actionable state.
+                        _LOGGER.debug(
+                            "[Coordinator] %s: BLE re-pair attempt failed (expected without PAIR press): %s",
                             self._name,
                             pair_err,
                         )

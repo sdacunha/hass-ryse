@@ -60,14 +60,28 @@ class BleAuthFailedRepairFlow(RepairsFlow):
             if not await coordinator.device.connect():
                 return self.async_abort(reason="cannot_connect")
 
+            # Clear any stale bond on the proxy first — a stale LTK causes
+            # the device to drop the link with "Insufficient authentication"
+            # when the proxy tries to encrypt with it on reconnect.
+            try:
+                await coordinator.device.client.unpair()
+            except Exception as unpair_err:
+                _LOGGER.debug(
+                    "[Repairs] unpair() on primary proxy returned %s (often expected if no prior bond)",
+                    unpair_err,
+                )
             await coordinator.device.client.pair()
             _LOGGER.info("[Repairs] Successfully re-paired %s on primary proxy", address)
             await coordinator.device.disconnect()
 
-            # Bond with all other proxies that can reach this device
+            # Bond with all other proxies that can reach this device.
+            # Sort by RSSI ascending so the strongest-signal proxy is bonded
+            # LAST — if the shade only stores one bond, the most-likely-used
+            # proxy retains it.
             scanner_devices = async_scanner_devices_by_address(self.hass, address, connectable=True)
+            scanner_devices.sort(key=lambda sd: getattr(sd.advertisement, "rssi", -127))
             _LOGGER.info(
-                "[Repairs] Found %d proxy/adapter(s) for %s — bonding with each",
+                "[Repairs] Found %d proxy/adapter(s) for %s — bonding with each (worst→best RSSI)",
                 len(scanner_devices),
                 address,
             )
@@ -82,6 +96,14 @@ class BleAuthFailedRepairFlow(RepairsFlow):
                         timeout=10.0,
                     )
                     if client.is_connected:
+                        try:
+                            await client.unpair()
+                        except Exception as unpair_err:
+                            _LOGGER.debug(
+                                "[Repairs] unpair() on proxy %s returned %s",
+                                source,
+                                unpair_err,
+                            )
                         try:
                             await client.pair()
                             _LOGGER.info("[Repairs] Bonded %s via proxy %s", address, source)

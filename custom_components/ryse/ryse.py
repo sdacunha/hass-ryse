@@ -207,6 +207,16 @@ class RyseDevice:
                         "shade requires re-pairing (press the pair button on the shade)"
                     )
                     self._needs_repair = True
+                    # Best-effort: clear the proxy's stale bond so the next
+                    # connect attempt doesn't immediately retry encryption
+                    # with the bad LTK. Safe to call without an active
+                    # connection on BlueZ; on backends that need a live
+                    # link, this will simply be a no-op.
+                    try:
+                        await BleakClient(self.ble_device).unpair()
+                        _LOGGER.debug(f"[{self.address}] Cleared stale bond on proxy")
+                    except Exception as unpair_err:
+                        _LOGGER.debug(f"[{self.address}] unpair() after auth failure returned {unpair_err}")
                 else:
                     _LOGGER.error(f"[{self.address}] Connection failed: {type(e).__name__}: {e}")
 
