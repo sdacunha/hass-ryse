@@ -1,4 +1,5 @@
 from homeassistant.components import bluetooth
+from homeassistant.components.bluetooth import async_scanner_devices_by_address
 from homeassistant.components.bluetooth.active_update_coordinator import (
     ActiveBluetoothDataUpdateCoordinator,
 )
@@ -49,10 +50,10 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         self.device.add_disconnect_callback(self._handle_device_disconnected)
         self.device.add_position_callback(self._handle_position_notification)
         # Provide a callback so establish_connection can fetch a fresh BLEDevice
-        # on each retry, automatically routing through the best available proxy.
-        self.device._ble_device_callback = lambda: bluetooth.async_ble_device_from_address(
-            self.hass, self.address, connectable=True
-        )
+        # on each retry. If we know which proxy holds the bond (single-bond
+        # device — see ryse.py:_bonded_source) prefer that proxy; otherwise
+        # fall back to the highest-RSSI connectable BLEDevice.
+        self.device._ble_device_callback = self._pick_ble_device
 
     def async_start(self):
         """Start the coordinator — called via entry.async_on_unload.
@@ -88,6 +89,20 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             self._reconnect_task.cancel()
             self._reconnect_task = None
 
+    def _pick_ble_device(self):
+        """Return a BLEDevice, preferring the bonded proxy if known/visible."""
+        bonded = self.device._bonded_source
+        if bonded:
+            for sd in async_scanner_devices_by_address(self.hass, self.address, connectable=True):
+                if getattr(sd.scanner, "source", None) == bonded:
+                    return sd.ble_device
+            _LOGGER.debug(
+                "[Coordinator] %s: bonded proxy %s not visible, falling back",
+                self._name,
+                bonded,
+            )
+        return bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
+
     async def _async_init_timeout(self):
         await asyncio.sleep(DEFAULT_INIT_TIMEOUT)
         if self._initializing:
@@ -106,9 +121,15 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
     @callback
     def _async_handle_bluetooth_event(self, service_info, change):
         """Handle advertisement data from the base class callback."""
-        # Always update BLE device reference from latest advertisement
+        # Update the BLE device reference, but if we have a bonded proxy,
+        # only accept advertisements from THAT proxy. Updating from a
+        # non-bonded proxy would cause the next connect to route through
+        # an adapter without a valid LTK and trip "Insufficient auth".
         if hasattr(service_info, "device") and service_info.device:
-            self.device.set_ble_device(service_info.device)
+            bonded = self.device._bonded_source
+            adv_source = getattr(service_info, "source", None)
+            if not bonded or adv_source == bonded:
+                self.device.set_ble_device(service_info.device)
         adv = self.device.parse_advertisement(service_info)
         if adv.get("position") is not None:
             self._position = adv["position"]
@@ -208,7 +229,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             await asyncio.sleep(delay)
             async with self.device._connection_semaphore:
                 await self.device.disconnect()
-                ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
+                ble_device = self._pick_ble_device()
                 if not ble_device:
                     _LOGGER.debug(
                         "[Coordinator] Active reconnect attempt %d: no BLE device for %s",
@@ -243,7 +264,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             async with self.device._connection_semaphore:
                 _LOGGER.info("[Coordinator] Slow reconnect attempt for %s", self._name)
                 await self.device.disconnect()
-                ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
+                ble_device = self._pick_ble_device()
                 if not ble_device:
                     _LOGGER.debug(
                         "[Coordinator] Slow reconnect: no BLE device for %s, will retry",
@@ -264,7 +285,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
     def _needs_poll(self, service_info, seconds_since_last_poll):
         if self.device._active_mode:
             return False
-        ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
+        ble_device = self._pick_ble_device()
         should_poll = (
             self.hass.state == self.hass.CoreState.running
             and self.device.poll_needed(seconds_since_last_poll)
@@ -284,7 +305,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             self._name,
             self.address,
         )
-        ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
+        ble_device = self._pick_ble_device()
         if not ble_device:
             _LOGGER.warning("[Coordinator] No BLE device found for %s during poll", self._name)
             self._available = False
@@ -369,7 +390,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         if not client or not client.is_connected:
             async with self.device._connection_semaphore:
                 await self.device.disconnect()
-                ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
+                ble_device = self._pick_ble_device()
                 if not ble_device:
                     self._available = False
                     self._was_unavailable = True

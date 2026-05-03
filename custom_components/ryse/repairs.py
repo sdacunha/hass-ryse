@@ -5,10 +5,7 @@ from __future__ import annotations
 import logging
 
 from homeassistant import data_entry_flow
-from homeassistant.components.bluetooth import (
-    async_ble_device_from_address,
-    async_scanner_devices_by_address,
-)
+from homeassistant.components.bluetooth import async_scanner_devices_by_address
 from homeassistant.components.repairs import RepairsFlow
 from homeassistant.helpers import issue_registry as ir
 
@@ -30,7 +27,7 @@ class BleAuthFailedRepairFlow(RepairsFlow):
         return self.async_show_form(step_id="init")
 
     async def async_step_repair(self, user_input=None) -> data_entry_flow.FlowResult:
-        """Attempt to reconnect and re-pair the BLE device on all proxies."""
+        """Pair through the highest-RSSI proxy and pin all future connections to it."""
         # Extract the address from the issue ID: "ble_auth_failed_{address}"
         address = self.issue_id.removeprefix("ble_auth_failed_")
 
@@ -47,83 +44,59 @@ class BleAuthFailedRepairFlow(RepairsFlow):
             return self.async_abort(reason="device_not_found")
 
         try:
-            ble_device = async_ble_device_from_address(self.hass, address, connectable=True)
-            if not ble_device:
+            # The shade stores exactly one BLE bond, so we deliberately
+            # bond through the strongest-RSSI proxy and pin to it. Bonding
+            # through more than one proxy would just race to overwrite.
+            scanner_devices = async_scanner_devices_by_address(self.hass, address, connectable=True)
+            if not scanner_devices:
                 return self.async_abort(reason="device_not_found")
+            scanner_devices.sort(key=lambda sd: getattr(sd.advertisement, "rssi", -127), reverse=True)
+            best = scanner_devices[0]
+            best_source = getattr(best.scanner, "source", None)
+            _LOGGER.info(
+                "[Repairs] Pairing %s via highest-RSSI proxy %s (rssi=%s)",
+                address,
+                best_source,
+                getattr(best.advertisement, "rssi", "?"),
+            )
 
-            coordinator.device.set_ble_device(ble_device)
-
-            # Disconnect any stale connection
+            # Disconnect any stale coordinator connection first
             await coordinator.device.disconnect()
 
-            # Establish a fresh connection and pair on primary proxy
-            if not await coordinator.device.connect():
+            client = await establish_connection(
+                BleakClient,
+                best.ble_device,
+                address,
+                max_attempts=2,
+                timeout=15.0,
+            )
+            if not client.is_connected:
                 return self.async_abort(reason="cannot_connect")
 
-            # Clear any stale bond on the proxy first — a stale LTK causes
-            # the device to drop the link with "Insufficient authentication"
-            # when the proxy tries to encrypt with it on reconnect.
+            # Clear any stale bond on this proxy before pairing — a stale
+            # LTK would cause the device to drop the link mid-pair.
             try:
-                await coordinator.device.client.unpair()
+                await client.unpair()
             except Exception as unpair_err:
                 _LOGGER.debug(
-                    "[Repairs] unpair() on primary proxy returned %s (often expected if no prior bond)",
+                    "[Repairs] unpair() on %s returned %s (expected if no prior bond)",
+                    best_source,
                     unpair_err,
                 )
-            await coordinator.device.client.pair()
-            _LOGGER.info("[Repairs] Successfully re-paired %s on primary proxy", address)
-            await coordinator.device.disconnect()
+            await client.pair()
+            _LOGGER.info("[Repairs] Successfully bonded %s via %s", address, best_source)
+            await client.disconnect()
 
-            # Bond with all other proxies that can reach this device.
-            # Sort by RSSI ascending so the strongest-signal proxy is bonded
-            # LAST — if the shade only stores one bond, the most-likely-used
-            # proxy retains it.
-            scanner_devices = async_scanner_devices_by_address(self.hass, address, connectable=True)
-            scanner_devices.sort(key=lambda sd: getattr(sd.advertisement, "rssi", -127))
-            _LOGGER.info(
-                "[Repairs] Found %d proxy/adapter(s) for %s — bonding with each (worst→best RSSI)",
-                len(scanner_devices),
-                address,
-            )
-            for scanner_device in scanner_devices:
-                source = getattr(scanner_device.scanner, "source", "unknown")
-                try:
-                    client = await establish_connection(
-                        BleakClient,
-                        scanner_device.ble_device,
-                        address,
-                        max_attempts=1,
-                        timeout=10.0,
-                    )
-                    if client.is_connected:
-                        try:
-                            await client.unpair()
-                        except Exception as unpair_err:
-                            _LOGGER.debug(
-                                "[Repairs] unpair() on proxy %s returned %s",
-                                source,
-                                unpair_err,
-                            )
-                        try:
-                            await client.pair()
-                            _LOGGER.info("[Repairs] Bonded %s via proxy %s", address, source)
-                        except Exception as pair_err:
-                            _LOGGER.warning(
-                                "[Repairs] pair() failed on proxy %s for %s: %s",
-                                source,
-                                address,
-                                pair_err,
-                            )
-                        await client.disconnect()
-                except Exception as e:
-                    _LOGGER.warning(
-                        "[Repairs] Could not bond %s via proxy %s: %s",
-                        address,
-                        source,
-                        e,
+            # Pin future connections to this proxy. Persist on the config
+            # entry so the pin survives HA restart.
+            if best_source:
+                coordinator.device._bonded_source = best_source
+                entry = self.hass.config_entries.async_get_entry(coordinator._entry_id)
+                if entry is not None:
+                    self.hass.config_entries.async_update_entry(
+                        entry, data={**entry.data, "bonded_source": best_source}
                     )
 
-            # Clear the repair issue
             ir.async_delete_issue(self.hass, DOMAIN, self.issue_id)
             coordinator.device._needs_repair = False
 

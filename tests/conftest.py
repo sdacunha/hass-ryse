@@ -75,6 +75,7 @@ def mock_ryse_device():
     device.client.pair = AsyncMock()
     device._is_connected = True
     device._connecting = False
+    device._bonded_source = None
     device._active_mode = False
     device._max_retry_attempts = 3
     device._active_reconnect_delay = 5

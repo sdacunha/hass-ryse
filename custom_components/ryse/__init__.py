@@ -183,6 +183,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Create device instance
     device = RyseDevice(address)
     _apply_options(device, entry.options)
+    # Restore the bonded proxy MAC so reconnects pin to the same adapter
+    # the bond lives on (RYSE shade is single-bond; routing through any
+    # other proxy trips Insufficient authentication).
+    device._bonded_source = entry.data.get("bonded_source")
+    if device._bonded_source:
+        _LOGGER.info(
+            "[init] %s pinned to bonded proxy %s",
+            entry.data.get("name", address),
+            device._bonded_source,
+        )
     _LOGGER.info("[init] Created RyseDevice (id: %s) for address: %s", id(device), entry.data["address"])
 
     # Lazy import to avoid pulling in homeassistant.components.bluetooth at

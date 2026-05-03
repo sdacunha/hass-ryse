@@ -41,6 +41,11 @@ class RyseDevice:
         self._connection_semaphore = asyncio.Semaphore(1)
         self._connecting = False
         self._needs_repair = False
+        # Source MAC of the proxy/adapter that successfully bonded with the
+        # shade. The device only stores ONE bond at a time, so reconnects
+        # MUST go through the same proxy or auth-5 fires. None means "any
+        # proxy" (initial state, or after wipe).
+        self._bonded_source: str | None = None
         self._idle_timer = None
         self._disconnect_callbacks = []
         # Configurable timeouts (can be updated from config entry options)
