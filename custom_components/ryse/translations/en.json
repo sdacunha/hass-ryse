@@ -32,6 +32,7 @@
           "connection_timeout": "Connection timeout (seconds)",
           "max_retry_attempts": "Max connection retry attempts",
           "active_reconnect_delay": "Active mode reconnect delay (seconds)",
+          "active_keepalive_interval": "Active mode keepalive interval (seconds)",
           "disable_battery_sensor": "Disable battery sensor"
         },
         "data_description": {
@@ -41,6 +42,7 @@
           "connection_timeout": "How long to wait for a Bluetooth connection attempt (5–60).",
           "max_retry_attempts": "Number of times to retry a failed connection (1–10).",
           "active_reconnect_delay": "Seconds to wait before reconnecting after an unexpected disconnect in active mode (1–30).",
+          "active_keepalive_interval": "How often to read GATT in active mode to keep the BLE link alive (10–600). Prevents the shade's idle-drop timer from disconnecting the persistent connection.",
           "disable_battery_sensor": "Hide the battery sensor for this device. Useful for plugged-in blinds that report unreliable battery values."
         }
       }
@@ -81,6 +83,7 @@
           "connection_timeout": "Connection timeout (seconds)",
           "max_retry_attempts": "Max connection retry attempts",
           "active_reconnect_delay": "Active mode reconnect delay (seconds)",
+          "active_keepalive_interval": "Active mode keepalive interval (seconds)",
           "disable_battery_sensor": "Disable battery sensor"
         },
         "data_description": {
@@ -90,6 +93,7 @@
           "connection_timeout": "How long to wait for a Bluetooth connection attempt (5–60).",
           "max_retry_attempts": "Number of times to retry a failed connection (1–10).",
           "active_reconnect_delay": "Seconds to wait before reconnecting after an unexpected disconnect in active mode (1–30).",
+          "active_keepalive_interval": "How often to read GATT in active mode to keep the BLE link alive (10–600). Prevents the shade's idle-drop timer from disconnecting the persistent connection.",
           "disable_battery_sensor": "Hide the battery sensor for this device. Useful for plugged-in blinds that report unreliable battery values."
         }
       }

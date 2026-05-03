@@ -26,6 +26,7 @@ from .const import (
     DEFAULT_MAX_RETRY_ATTEMPTS,
     DEFAULT_ACTIVE_MODE,
     DEFAULT_ACTIVE_RECONNECT_DELAY,
+    DEFAULT_ACTIVE_KEEPALIVE_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ def _apply_options(device: RyseDevice, options: dict) -> None:
     device._max_retry_attempts = options.get("max_retry_attempts", DEFAULT_MAX_RETRY_ATTEMPTS)
     device._active_mode = options.get("active_mode", DEFAULT_ACTIVE_MODE)
     device._active_reconnect_delay = options.get("active_reconnect_delay", DEFAULT_ACTIVE_RECONNECT_DELAY)
+    device._keepalive_interval = options.get("active_keepalive_interval", DEFAULT_ACTIVE_KEEPALIVE_INTERVAL)
 
 
 async def async_setup(hass: HomeAssistant, config: dict):

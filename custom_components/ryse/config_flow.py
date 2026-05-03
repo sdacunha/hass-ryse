@@ -25,6 +25,7 @@ from .const import (
     DEFAULT_MAX_RETRY_ATTEMPTS,
     DEFAULT_ACTIVE_MODE,
     DEFAULT_ACTIVE_RECONNECT_DELAY,
+    DEFAULT_ACTIVE_KEEPALIVE_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,6 +61,9 @@ SETTINGS_SCHEMA = vol.Schema(
         ),
         vol.Optional("active_reconnect_delay", default=DEFAULT_ACTIVE_RECONNECT_DELAY): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=30)
+        ),
+        vol.Optional("active_keepalive_interval", default=DEFAULT_ACTIVE_KEEPALIVE_INTERVAL): vol.All(
+            vol.Coerce(int), vol.Range(min=10, max=600)
         ),
         vol.Optional("disable_battery_sensor", default=False): bool,
     }
@@ -318,6 +322,10 @@ class RyseOptionsFlow(config_entries.OptionsFlow):
                         "active_reconnect_delay",
                         default=options.get("active_reconnect_delay", DEFAULT_ACTIVE_RECONNECT_DELAY),
                     ): vol.All(vol.Coerce(int), vol.Range(min=1, max=30)),
+                    vol.Optional(
+                        "active_keepalive_interval",
+                        default=options.get("active_keepalive_interval", DEFAULT_ACTIVE_KEEPALIVE_INTERVAL),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=10, max=600)),
                     vol.Optional(
                         "disable_battery_sensor",
                         default=options.get("disable_battery_sensor", False),

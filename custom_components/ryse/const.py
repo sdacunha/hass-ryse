@@ -13,3 +13,4 @@ DEFAULT_INIT_TIMEOUT = 30  # seconds (wait for first advertisement)
 DEFAULT_IDLE_DISCONNECT_TIMEOUT = 60  # seconds - disconnect BLE after inactivity
 DEFAULT_ACTIVE_MODE = False  # keep persistent BLE connection (for plugged-in blinds)
 DEFAULT_ACTIVE_RECONNECT_DELAY = 5  # seconds before reconnecting in active mode
+DEFAULT_ACTIVE_KEEPALIVE_INTERVAL = 60  # seconds between GATT keepalive reads in active mode

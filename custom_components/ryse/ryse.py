@@ -16,6 +16,7 @@ from .const import (
     DEFAULT_POLL_INTERVAL,
     DEFAULT_ACTIVE_MODE,
     DEFAULT_ACTIVE_RECONNECT_DELAY,
+    DEFAULT_ACTIVE_KEEPALIVE_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ class RyseDevice:
         # proxy" (initial state, or after wipe).
         self._bonded_source: str | None = None
         self._idle_timer = None
+        self._keepalive_task: asyncio.Task | None = None
         self._disconnect_callbacks = []
         # Configurable timeouts (can be updated from config entry options)
         self._connection_timeout = DEFAULT_CONNECTION_TIMEOUT
@@ -55,6 +57,7 @@ class RyseDevice:
         self._idle_disconnect_timeout = DEFAULT_IDLE_DISCONNECT_TIMEOUT
         self._active_mode = DEFAULT_ACTIVE_MODE
         self._active_reconnect_delay = DEFAULT_ACTIVE_RECONNECT_DELAY
+        self._keepalive_interval = DEFAULT_ACTIVE_KEEPALIVE_INTERVAL
         self._ble_device_callback = None  # Set by coordinator for fresh BLEDevice on retries
 
     def add_battery_callback(self, callback):
@@ -110,6 +113,7 @@ class RyseDevice:
         self._is_connected = False
         self._connecting = False
         self._cancel_idle_timer()
+        self._cancel_keepalive()
         for cb in self._disconnect_callbacks:
             cb()
 
@@ -138,6 +142,48 @@ class RyseDevice:
         _LOGGER.debug(f"[{self.address}] Idle timeout ({self._idle_disconnect_timeout}s), disconnecting proactively")
         await self.disconnect()
 
+    def _start_keepalive(self):
+        """Start a periodic GATT read to prevent the device's idle-drop timer.
+
+        Active mode only — the shade appears to drop unactive GATT links
+        on a ~30 min firmware timer, which causes a reconnect/auth
+        cascade. A small periodic read keeps the link "busy" enough that
+        the device doesn't disconnect us.
+        """
+        if not self._active_mode:
+            return
+        if self._keepalive_task and not self._keepalive_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            self._keepalive_task = loop.create_task(self._keepalive_loop())
+        except RuntimeError:
+            pass  # No running loop (e.g. during shutdown)
+
+    def _cancel_keepalive(self):
+        """Cancel the keepalive task."""
+        if self._keepalive_task and not self._keepalive_task.done():
+            self._keepalive_task.cancel()
+        self._keepalive_task = None
+
+    async def _keepalive_loop(self):
+        """Periodically read RX to keep the GATT link active."""
+        try:
+            while True:
+                await asyncio.sleep(self._keepalive_interval)
+                if not self._is_connected or not self.client or not self.client.is_connected:
+                    return
+                try:
+                    await self.client.read_gatt_char(POSITION_CHAR_UUID)
+                    _LOGGER.debug(f"[{self.address}] keepalive ok")
+                except Exception as e:
+                    # Keepalive failure means the link is already dying;
+                    # let the disconnect callback handle recovery.
+                    _LOGGER.debug(f"[{self.address}] keepalive read failed: {e}")
+                    return
+        except asyncio.CancelledError:
+            return
+
     def set_ble_device(self, ble_device: BLEDevice | None) -> None:
         self.ble_device = ble_device
 
@@ -153,6 +199,7 @@ class RyseDevice:
                 self._is_connected = True
                 self._connecting = False
                 self._schedule_idle_disconnect()
+                self._start_keepalive()
                 _LOGGER.debug(f"[{self.address}] Already connected")
                 return True
 
@@ -193,6 +240,7 @@ class RyseDevice:
                     self._is_connected = True
                     self._connecting = False
                     self._schedule_idle_disconnect()
+                    self._start_keepalive()
                     _LOGGER.info(f"[{self.address}] Successfully connected")
                     return True
 
@@ -237,6 +285,7 @@ class RyseDevice:
         """Disconnect from the device with proper state tracking."""
         async with self._connection_lock:
             self._cancel_idle_timer()
+            self._cancel_keepalive()
             # Capture and clear client ref before disconnecting so the
             # _on_disconnected callback (fired by bleak) becomes a no-op.
             client = self.client

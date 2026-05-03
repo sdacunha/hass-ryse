@@ -432,50 +432,19 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                     attempt + 1,
                     e,
                 )
-                if "Insufficient authentication" in err_str and attempt == 0:
-                    _LOGGER.warning(
-                        "[Coordinator] %s: BLE auth failed, attempting re-pair",
-                        self._name,
+                if "Insufficient authentication" in err_str:
+                    # Auto re-pair can't succeed without a physical PAIR
+                    # press, so don't retry it — surface the repair issue
+                    # and let the user drive the recovery flow.
+                    ir.async_create_issue(
+                        self.hass,
+                        DOMAIN,
+                        f"ble_auth_failed_{self.address}",
+                        is_fixable=True,
+                        severity=ir.IssueSeverity.ERROR,
+                        translation_key="ble_auth_failed",
+                        translation_placeholders={"name": self._name},
                     )
-                    try:
-                        if not self.device.client or not self.device.client.is_connected:
-                            await self.device.disconnect()
-                            if not await self._ensure_connected():
-                                continue
-                        # Clear any stale bond on the proxy first; without
-                        # the user pressing PAIR, this is the only thing
-                        # that can recover an auth failure caused by an
-                        # out-of-sync LTK.
-                        try:
-                            await self.device.client.unpair()
-                        except Exception as unpair_err:
-                            _LOGGER.debug(
-                                "[Coordinator] %s: unpair() returned %s",
-                                self._name,
-                                unpair_err,
-                            )
-                        await self.device.client.pair()
-                        _LOGGER.info("[Coordinator] %s: BLE re-pair successful", self._name)
-                        continue
-                    except Exception as pair_err:
-                        # Expected to fail when the device is not in pairing
-                        # mode — only the user pressing PAIR can recover. Log
-                        # at debug to keep the user-visible log clean; the
-                        # repair issue below surfaces the actionable state.
-                        _LOGGER.debug(
-                            "[Coordinator] %s: BLE re-pair attempt failed (expected without PAIR press): %s",
-                            self._name,
-                            pair_err,
-                        )
-                        ir.async_create_issue(
-                            self.hass,
-                            DOMAIN,
-                            f"ble_auth_failed_{self.address}",
-                            is_fixable=True,
-                            severity=ir.IssueSeverity.ERROR,
-                            translation_key="ble_auth_failed",
-                            translation_placeholders={"name": self._name},
-                        )
                 await self.device.disconnect()
                 if attempt == 0:
                     await asyncio.sleep(2)
