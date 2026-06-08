@@ -1,39 +1,99 @@
-# Ignore Python cache directories and files
+# =============================================================================
+# Python
+# =============================================================================
 __pycache__/
 **/__pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
 
-# Home Assistant specific ignores
-# Ignore Home Assistant database and log files
+# Virtualenvs
+.venv/
+venv/
+env/
+.python-version
+
+# Packaging / build artifacts
+*.egg-info/
+dist/
+build/
+*.egg
+pip-wheel-metadata/
+
+# Test / lint / type-check caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.hypothesis/
+
+# =============================================================================
+# Home Assistant runtime / state
+# =============================================================================
+# Devcontainer / dev HA state — entirely ephemeral. Seed config (if any)
+# lives in .devcontainer/configuration.yaml.
+config/
+
+# DB + logs (sometimes pasted into repo root during debugging)
 home-assistant_v2.db
 home-assistant_v2.db-shm
 home-assistant_v2.db-wal
 home-assistant.log
 home-assistant.log.*
-
-# Ignore Home Assistant configuration secrets
-secrets.yaml
-
-# Ignore Home Assistant storage and backup files
-.storage/
-.backups/
-
-# Ignore custom component cache
-custom_components/*/__pycache__/
-
-# Ignore other common files
 *.db
-*.log
-*.sqlite3
 *.db-shm
 *.db-wal
+*.sqlite3
+*.log
+
+# Storage / backups / secrets — never commit these
+.storage/
+.backups/
+secrets.yaml
+known_devices.yaml
+
+# =============================================================================
+# Editor / IDE / OS noise
+# =============================================================================
 .DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
 *.swp
 *.swo
 *.bak
 *.tmp
+*~
 
-# Build artifacts
-*.egg-info/
-dist/
-build/
+# VS Code / Cursor — keep workspace files out of the repo unless you want them
+.vscode/
+.cursor/
+*.code-workspace
+
+# JetBrains
+.idea/
+*.iml
+
+# =============================================================================
+# Tooling state (project-local agents/assistants)
+# =============================================================================
+.claude/
+
+# =============================================================================
+# Node (in case anything ever needs it)
+# =============================================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =============================================================================
+# Misc
+# =============================================================================
+.envrc
+.direnv/

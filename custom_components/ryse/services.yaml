@@ -1,15 +1,3 @@
-pair_device:
-  description: "Scan for a BLE device that starts pairing and automatically connect"
-unpair_device:
-  description: "Unpair the RYSE BLE device"
-read_info:
-  description: "Read data from the RYSE BLE device"
-send_raw_data:
-  description: "Send raw data to the RYSE BLE device"
-  fields:
-    data:
-      description: "Data to send in hex format"
-      example: "01020304"
 test_ble_connection:
   description: "Test if a shade accepts BLE connections and GATT reads without pairing. Logs results to help diagnose bonding requirements."
   fields:
@@ -17,10 +5,19 @@ test_ble_connection:
       description: "BLE MAC address of the shade to test"
       example: "D8:02:6C:06:9C:32"
       required: true
+
 bond_all_proxies:
   description: "Bond a shade with every ESPHome proxy that can reach it. Put the shade in pairing mode first."
   fields:
     address:
       description: "BLE MAC address of the shade to bond"
+      example: "D8:02:6C:06:9C:32"
+      required: true
+
+inspect_device:
+  description: "Deep-dive diagnostic: dump every GATT service/characteristic/descriptor on the shade, listen for notifications, time a get-position round-trip. Watch the log under [RYSE INSPECT]."
+  fields:
+    address:
+      description: "BLE MAC address of the shade to inspect"
       example: "D8:02:6C:06:9C:32"
       required: true

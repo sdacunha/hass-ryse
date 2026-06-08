@@ -1,93 +1,91 @@
-import logging
+"""Minimal BLE wrapper for the RYSE SmartShade.
+
+Connect on demand, write/read GATT, disconnect when done. No persistent
+connection management, no keepalive, no proxy pinning — that lives in
+the coordinator (or doesn't exist at all). HA's bluetooth integration
+and bleak-retry-connector handle adapter routing.
+"""
+
+from __future__ import annotations
+
 import asyncio
+import logging
+import time
+
 from bleak import BleakClient
 from bleak.backends.device import BLEDevice
-from bleak_retry_connector import establish_connection, BleakNotFoundError
+from bleak_retry_connector import BleakNotFoundError, establish_connection
 
-try:
-    from bleak_retry_connector import BleakOutOfConnectionSlotsError
-except ImportError:
-    BleakOutOfConnectionSlotsError = None
 from .const import (
-    HARDCODED_UUIDS,
-    DEFAULT_IDLE_DISCONNECT_TIMEOUT,
     DEFAULT_CONNECTION_TIMEOUT,
     DEFAULT_MAX_RETRY_ATTEMPTS,
-    DEFAULT_POLL_INTERVAL,
-    DEFAULT_ACTIVE_MODE,
-    DEFAULT_ACTIVE_RECONNECT_DELAY,
-    DEFAULT_ACTIVE_KEEPALIVE_INTERVAL,
+    HARDCODED_UUIDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-# Use the RX and TX UUIDs for operations
 POSITION_CHAR_UUID = HARDCODED_UUIDS["rx_uuid"]
 COMMAND_CHAR_UUID = HARDCODED_UUIDS["tx_uuid"]
 
 
 class RyseDevice:
+    """Thin async wrapper around a RYSE BLE peripheral."""
+
     def __init__(self, address: str):
         self.address = address
         self.ble_device: BLEDevice | None = None
         self.client: BleakClient | None = None
-        self._battery_callbacks = []
-        self._unavailable_callbacks = []
-        self._adv_callbacks = []
-        self._position_callbacks = []
-        self._latest_battery = None
-        self._battery_level = None
-        self._is_connected = False
-        self._connection_lock = asyncio.Lock()
-        self._connection_semaphore = asyncio.Semaphore(1)
-        self._connecting = False
-        self._needs_repair = False
-        # Source MAC of the proxy/adapter that successfully bonded with the
-        # shade. The device only stores ONE bond at a time, so reconnects
-        # MUST go through the same proxy or auth-5 fires. None means "any
-        # proxy" (initial state, or after wipe).
-        self._bonded_source: str | None = None
-        self._idle_timer = None
-        self._keepalive_task: asyncio.Task | None = None
-        self._disconnect_callbacks = []
-        # Configurable timeouts (can be updated from config entry options)
+        self._lock = asyncio.Lock()
         self._connection_timeout = DEFAULT_CONNECTION_TIMEOUT
         self._max_retry_attempts = DEFAULT_MAX_RETRY_ATTEMPTS
-        self._poll_interval = DEFAULT_POLL_INTERVAL
-        self._idle_disconnect_timeout = DEFAULT_IDLE_DISCONNECT_TIMEOUT
-        self._active_mode = DEFAULT_ACTIVE_MODE
-        self._active_reconnect_delay = DEFAULT_ACTIVE_RECONNECT_DELAY
-        self._keepalive_interval = DEFAULT_ACTIVE_KEEPALIVE_INTERVAL
-        self._ble_device_callback = None  # Set by coordinator for fresh BLEDevice on retries
+        self._position_callbacks: list = []
+        self._battery_callbacks: list = []
+        self._adv_callbacks: list = []
+        self._disconnect_callbacks: list = []
 
-    def add_battery_callback(self, callback):
-        """Add a callback for battery updates."""
-        self._battery_callbacks.append(callback)
+    # ------------------------------------------------------------------
+    # Callback registration
+    # ------------------------------------------------------------------
 
-    def add_unavailable_callback(self, callback):
-        """Add a callback for device unavailability."""
-        self._unavailable_callbacks.append(callback)
+    def add_position_callback(self, cb):
+        self._position_callbacks.append(cb)
 
-    def add_adv_callback(self, callback):
-        """Add a callback for advertisement updates."""
-        self._adv_callbacks.append(callback)
+    def add_battery_callback(self, cb):
+        self._battery_callbacks.append(cb)
 
-    def add_disconnect_callback(self, callback):
-        """Add a callback for unexpected disconnections."""
-        self._disconnect_callbacks.append(callback)
+    def add_adv_callback(self, cb):
+        self._adv_callbacks.append(cb)
 
-    def add_position_callback(self, callback):
-        """Add a callback for real-time position updates from GATT notifications."""
-        self._position_callbacks.append(callback)
+    def add_disconnect_callback(self, cb):
+        self._disconnect_callbacks.append(cb)
+
+    # Retained for backward compat with cover/sensor wiring; no-op here.
+    def add_unavailable_callback(self, _cb):
+        pass
+
+    # ------------------------------------------------------------------
+    # State accessors
+    # ------------------------------------------------------------------
+
+    @property
+    def is_connected(self) -> bool:
+        return bool(self.client and self.client.is_connected)
+
+    def set_ble_device(self, ble_device: BLEDevice | None) -> None:
+        self.ble_device = ble_device
 
     def get_battery_level(self) -> int | None:
-        """Get the latest battery level."""
-        return self._battery_level
+        """Provided for entities that cached this on the device; we no longer track it here."""
+        return None
 
-    def _handle_notification(self, _sender, data: bytearray):
-        """Handle GATT notifications from the RX characteristic.
+    # ------------------------------------------------------------------
+    # Notifications
+    # ------------------------------------------------------------------
 
-        Packet format (from RYSE protocol):
+    def _handle_notification(self, _sender, data: bytearray) -> None:
+        """Parse RYSE GATT notifications.
+
+        Packet format:
           data[0] == 0xF5  (header)
           data[2] == 0x01
           data[3] == 0x07  → position report, position at data[4]
@@ -95,131 +93,48 @@ class RyseDevice:
         """
         if len(data) < 5 or data[0] != 0xF5:
             return
-        if len(data) >= 5 and data[2] == 0x01 and data[3] == 0x07:
+        if data[2] == 0x01 and data[3] == 0x07:
             position = data[4]
-            _LOGGER.debug("[%s] GATT notification: position=%d", self.address, position)
             for cb in self._position_callbacks:
                 try:
                     cb(position)
                 except Exception:
                     _LOGGER.exception("[%s] Position callback error", self.address)
 
-    def _on_disconnected(self, client: BleakClient):
-        """Handle unexpected BLE disconnection."""
+    def _on_disconnected(self, client: BleakClient) -> None:
+        """Bleak fires this on link drop. Mark ourselves disconnected and notify."""
         if self.client is not client:
-            return  # Already cleaned up via explicit disconnect
-        _LOGGER.warning(f"[{self.address}] BLE connection lost unexpectedly")
+            return  # already torn down via explicit disconnect()
+        lifetime_s = time.monotonic() - getattr(self, "_connected_at", time.monotonic())
+        _LOGGER.warning(
+            "[%s] UNEXPECTED disconnect after %.1fs of connected lifetime — device dropped us",
+            self.address,
+            lifetime_s,
+        )
         self.client = None
-        self._is_connected = False
-        self._connecting = False
-        self._cancel_idle_timer()
-        self._cancel_keepalive()
         for cb in self._disconnect_callbacks:
-            cb()
-
-    def _schedule_idle_disconnect(self):
-        """Reset the idle disconnect timer. Disconnects after inactivity to prevent stale connections."""
-        if self._active_mode:
-            return  # Active mode: keep connection alive
-        self._cancel_idle_timer()
-        try:
-            loop = asyncio.get_running_loop()
-            self._idle_timer = loop.call_later(
-                self._idle_disconnect_timeout,
-                lambda: asyncio.ensure_future(self._idle_disconnect()),
-            )
-        except RuntimeError:
-            pass  # No running loop (e.g. during shutdown)
-
-    def _cancel_idle_timer(self):
-        """Cancel the idle disconnect timer."""
-        if self._idle_timer is not None:
-            self._idle_timer.cancel()
-            self._idle_timer = None
-
-    async def _idle_disconnect(self):
-        """Disconnect after idle timeout to prevent stale connections."""
-        _LOGGER.debug(f"[{self.address}] Idle timeout ({self._idle_disconnect_timeout}s), disconnecting proactively")
-        await self.disconnect()
-
-    def _start_keepalive(self):
-        """Start a periodic GATT read to prevent the device's idle-drop timer.
-
-        Active mode only — the shade appears to drop unactive GATT links
-        on a ~30 min firmware timer, which causes a reconnect/auth
-        cascade. A small periodic read keeps the link "busy" enough that
-        the device doesn't disconnect us.
-        """
-        if not self._active_mode:
-            return
-        if self._keepalive_task and not self._keepalive_task.done():
-            return
-        try:
-            loop = asyncio.get_running_loop()
-            self._keepalive_task = loop.create_task(self._keepalive_loop())
-        except RuntimeError:
-            pass  # No running loop (e.g. during shutdown)
-
-    def _cancel_keepalive(self):
-        """Cancel the keepalive task."""
-        if self._keepalive_task and not self._keepalive_task.done():
-            self._keepalive_task.cancel()
-        self._keepalive_task = None
-
-    async def _keepalive_loop(self):
-        """Periodically read RX to keep the GATT link active."""
-        try:
-            while True:
-                await asyncio.sleep(self._keepalive_interval)
-                if not self._is_connected or not self.client or not self.client.is_connected:
-                    return
-                try:
-                    await self.client.read_gatt_char(POSITION_CHAR_UUID)
-                    _LOGGER.debug(f"[{self.address}] keepalive ok")
-                except Exception as e:
-                    # Keepalive failure means the link is already dying;
-                    # let the disconnect callback handle recovery.
-                    _LOGGER.debug(f"[{self.address}] keepalive read failed: {e}")
-                    return
-        except asyncio.CancelledError:
-            return
-
-    def set_ble_device(self, ble_device: BLEDevice | None) -> None:
-        self.ble_device = ble_device
-
-    def update_ble_device_from_adv(self, service_info):
-        if hasattr(service_info, "device") and service_info.device:
-            self.set_ble_device(service_info.device)
-
-    async def connect(self):
-        """Connect using bleak-retry-connector for reliable connection establishment."""
-        async with self._connection_lock:
-            # Already connected
-            if self.client and self.client.is_connected:
-                self._is_connected = True
-                self._connecting = False
-                self._schedule_idle_disconnect()
-                self._start_keepalive()
-                _LOGGER.debug(f"[{self.address}] Already connected")
-                return True
-
-            # Prevent concurrent connection attempts
-            if self._connecting:
-                _LOGGER.debug(f"[{self.address}] Connection already in progress")
-                return False
-
-            self._connecting = True
-
-            if not self.ble_device:
-                _LOGGER.error(f"[{self.address}] No BLEDevice available for connection")
-                self._connecting = False
-                raise ConnectionError("No BLEDevice available for connection")
-
             try:
-                _LOGGER.info(
-                    f"[{self.address}] Connecting via bleak-retry-connector (max_attempts={self._max_retry_attempts})"
-                )
+                cb()
+            except Exception:
+                _LOGGER.exception("[%s] Disconnect callback error", self.address)
 
+    # ------------------------------------------------------------------
+    # Connection lifecycle
+    # ------------------------------------------------------------------
+
+    async def connect(self) -> bool:
+        async with self._lock:
+            if self.is_connected:
+                return True
+            if not self.ble_device:
+                _LOGGER.error("[%s] No BLEDevice available for connection", self.address)
+                return False
+            adapter_source = None
+            details = getattr(self.ble_device, "details", None)
+            if isinstance(details, dict):
+                adapter_source = details.get("source")
+            t0 = time.monotonic()
+            try:
                 self.client = await establish_connection(
                     BleakClient,
                     self.ble_device,
@@ -227,147 +142,107 @@ class RyseDevice:
                     max_attempts=self._max_retry_attempts,
                     timeout=self._connection_timeout,
                     disconnected_callback=self._on_disconnected,
-                    ble_device_callback=self._ble_device_callback,
                 )
-
-                if self.client.is_connected:
-                    # Subscribe to GATT notifications for real-time position updates
-                    try:
-                        await self.client.start_notify(POSITION_CHAR_UUID, self._handle_notification)
-                        _LOGGER.debug(f"[{self.address}] Subscribed to GATT notifications")
-                    except Exception as notify_err:
-                        _LOGGER.debug(f"[{self.address}] GATT notify subscription skipped: {notify_err}")
-                    self._is_connected = True
-                    self._connecting = False
-                    self._schedule_idle_disconnect()
-                    self._start_keepalive()
-                    _LOGGER.info(f"[{self.address}] Successfully connected")
-                    return True
-
             except BleakNotFoundError:
-                _LOGGER.warning(f"[{self.address}] Device not found")
-            except asyncio.TimeoutError:
-                _LOGGER.warning(f"[{self.address}] Connection timed out")
+                _LOGGER.warning("[%s] Device not found (via %s)", self.address, adapter_source)
+                return False
             except Exception as e:
-                if BleakOutOfConnectionSlotsError and isinstance(e, BleakOutOfConnectionSlotsError):
-                    _LOGGER.warning(
-                        f"[{self.address}] ESPHome proxy out of connection slots — "
-                        "add more proxies or reduce active mode devices"
-                    )
-                elif "Insufficient authentication" in str(e):
-                    _LOGGER.warning(
-                        f"[{self.address}] Insufficient authentication — "
-                        "shade requires re-pairing (press the pair button on the shade)"
-                    )
-                    self._needs_repair = True
-                    # Best-effort: clear the proxy's stale bond so the next
-                    # connect attempt doesn't immediately retry encryption
-                    # with the bad LTK. Safe to call without an active
-                    # connection on BlueZ; on backends that need a live
-                    # link, this will simply be a no-op.
-                    try:
-                        await BleakClient(self.ble_device).unpair()
-                        _LOGGER.debug(f"[{self.address}] Cleared stale bond on proxy")
-                    except Exception as unpair_err:
-                        _LOGGER.debug(f"[{self.address}] unpair() after auth failure returned {unpair_err}")
-                else:
-                    _LOGGER.error(f"[{self.address}] Connection failed: {type(e).__name__}: {e}")
+                _LOGGER.warning(
+                    "[%s] Connection failed after %.0fms via %s: %s",
+                    self.address,
+                    (time.monotonic() - t0) * 1000,
+                    adapter_source,
+                    e,
+                )
+                return False
 
-            # Connection failed
-            _LOGGER.error(f"[{self.address}] Connection attempts failed")
-            self._is_connected = False
-            self._connecting = False
-            for callback in self._unavailable_callbacks:
-                callback()
-            return False
+            connect_ms = (time.monotonic() - t0) * 1000
 
-    async def disconnect(self):
-        """Disconnect from the device with proper state tracking."""
-        async with self._connection_lock:
-            self._cancel_idle_timer()
-            self._cancel_keepalive()
-            # Capture and clear client ref before disconnecting so the
-            # _on_disconnected callback (fired by bleak) becomes a no-op.
+            if not self.client.is_connected:
+                _LOGGER.warning("[%s] Connect returned but is_connected=False (took %.0fms)", self.address, connect_ms)
+                return False
+
+            self._connected_at = time.monotonic()
+            _LOGGER.info(
+                "[%s] Connected in %.0fms via %s (mtu=%s)",
+                self.address,
+                connect_ms,
+                adapter_source,
+                getattr(self.client, "mtu_size", "?"),
+            )
+
+            try:
+                await self.client.start_notify(POSITION_CHAR_UUID, self._handle_notification)
+                _LOGGER.debug("[%s] subscribed to notifications", self.address)
+            except Exception as e:
+                _LOGGER.debug("[%s] start_notify failed: %s", self.address, e)
+            return True
+
+    async def disconnect(self) -> None:
+        async with self._lock:
             client = self.client
             self.client = None
-            self._is_connected = False
-            self._connecting = False
-            if client:
+            if client and client.is_connected:
+                lifetime_s = time.monotonic() - getattr(self, "_connected_at", time.monotonic())
+                t0 = time.monotonic()
                 try:
-                    if client.is_connected:
-                        _LOGGER.debug(f"[{self.address}] Disconnecting")
-                        await client.disconnect()
+                    await client.disconnect()
+                    _LOGGER.info(
+                        "[%s] Disconnected cleanly after %.1fs (disconnect took %.0fms)",
+                        self.address,
+                        lifetime_s,
+                        (time.monotonic() - t0) * 1000,
+                    )
                 except Exception as e:
-                    _LOGGER.debug(f"[{self.address}] Error during disconnect: {e}")
-            else:
-                _LOGGER.debug(f"[{self.address}] Already disconnected")
+                    _LOGGER.debug("[%s] Error during disconnect: %s", self.address, e)
 
-    async def set_position(self, position: int):
-        if not (0 <= position <= 100):
+    # ------------------------------------------------------------------
+    # Commands
+    # ------------------------------------------------------------------
+
+    async def set_position(self, position: int) -> None:
+        if not 0 <= position <= 100:
             raise ValueError("position must be between 0 and 100")
-        data_bytes = bytes([0xF5, 0x03, 0x01, 0x01, position])
-        checksum = sum(data_bytes[2:]) % 256
-        packet = data_bytes + bytes([checksum])
-        await self.write_gatt(COMMAND_CHAR_UUID, packet)
+        data = bytes([0xF5, 0x03, 0x01, 0x01, position])
+        checksum = sum(data[2:]) % 256
+        await self.write_gatt(COMMAND_CHAR_UUID, data + bytes([checksum]))
 
-    async def open(self):
+    async def open(self) -> None:
         await self.set_position(0)
 
-    async def close(self):
+    async def close(self) -> None:
         await self.set_position(100)
 
-    async def get_battery(self) -> int | None:
-        data = await self.read_gatt(POSITION_CHAR_UUID)
-        if data and len(data) >= 3:
-            self._battery_level = data[2]
-            self._latest_battery = data[2]
-            for callback in self._battery_callbacks:
-                await callback(data[2])
-            return data[2]
-        return None
-
-    async def get_position(self) -> int | None:
-        data = await self.read_gatt(POSITION_CHAR_UUID)
-        if data and len(data) >= 2:
-            return data[1]
-        return None
-
     async def read_gatt(self, char_uuid: str) -> bytes | None:
-        if not self.client or not self.client.is_connected:
+        if not self.is_connected:
             raise ConnectionError("Not connected to device")
-        result = await self.client.read_gatt_char(char_uuid)
-        self._schedule_idle_disconnect()  # Reset idle timer on activity
-        return result
+        return await self.client.read_gatt_char(char_uuid)
 
-    async def write_gatt(self, char_uuid: str, data: bytes):
-        if not self.client or not self.client.is_connected:
+    async def write_gatt(self, char_uuid: str, data: bytes) -> None:
+        if not self.is_connected:
             raise ConnectionError("Not connected to device")
+        t0 = time.monotonic()
         await self.client.write_gatt_char(char_uuid, data)
-        self._schedule_idle_disconnect()  # Reset idle timer on activity
+        _LOGGER.debug(
+            "[%s] GATT write to %s: %s (%.0fms)",
+            self.address,
+            char_uuid,
+            data.hex(),
+            (time.monotonic() - t0) * 1000,
+        )
+
+    # ------------------------------------------------------------------
+    # Static helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
     def parse_advertisement(service_info) -> dict:
-        result = {}
+        """Extract position + battery from RYSE manufacturer data (mfr_id 0x0409)."""
+        result: dict = {}
         for mfr_id, data in getattr(service_info, "manufacturer_data", {}).items():
-            _LOGGER.debug(
-                "[ADV] %s mfr_id=0x%04X raw=%s (hex=%s)",
-                getattr(service_info, "address", "?"),
-                mfr_id,
-                list(data),
-                data.hex(),
-            )
-            # Only use the RYSE manufacturer ID (0x0409). Other entries
-            # (e.g. 0x2082) contain unrelated data that was overwriting
-            # the correct position/battery values.
             if mfr_id not in (0x0409, 0x409):
                 continue
             if len(data) >= 3:
                 result["position"] = data[1]
                 result["battery"] = data[2]
         return result
-
-    def poll_needed(self, seconds_since_last_poll):
-        """Determine if a poll is needed based on configurable interval."""
-        if seconds_since_last_poll is None:
-            return True
-        return seconds_since_last_poll > self._poll_interval

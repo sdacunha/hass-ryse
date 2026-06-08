@@ -1,17 +1,28 @@
+"""Coordinator for RYSE SmartShade.
+
+Listens to BLE advertisements for state, connects on demand to issue
+commands, disconnects right after. No persistent connection, no
+keepalive, no proxy pinning — trust HA's bluetooth scoring and
+bleak-retry-connector to route through the right adapter/proxy.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import logging
+import time
+
+from bleak.exc import BleakError
 from homeassistant.components import bluetooth
-from homeassistant.components.bluetooth import async_scanner_devices_by_address
 from homeassistant.components.bluetooth.active_update_coordinator import (
     ActiveBluetoothDataUpdateCoordinator,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
-from datetime import datetime, timedelta
-import asyncio
-import logging
-import inspect
-from bleak.exc import BleakError
+
+from .const import DOMAIN
 from .ryse import RyseDevice
-from .const import DOMAIN, HARDCODED_UUIDS, DEFAULT_INIT_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,110 +41,74 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             logger=_LOGGER,
             address=address,
             needs_poll_method=self._needs_poll,
-            poll_method=self._async_update,
+            poll_method=self._noop_poll,
             mode=bluetooth.BluetoothScanningMode.PASSIVE,
             connectable=True,
         )
         self.device = device
         self._name = name
         self._entry_id = entry_id
-        self._position = None
-        self._battery = None
-        self._last_adv = None
-        # Always start as unavailable and initializing until a valid adv or GATT poll
+        self._position: int | None = None
+        self._battery: int | None = None
         self._available = False
-        self._initializing = True
-        self._ready_event = asyncio.Event()
-        self._was_unavailable = True
-        self._reconnect_task = None
-        self._last_warm_connect_attempt = None
-        self.device.add_disconnect_callback(self._handle_device_disconnected)
+        self._adv_count = 0
+        self._adv_first_ts: float | None = None
+        self._adv_last_ts: float | None = None
+        self._adv_last_summary_ts: float = 0.0
+        self._adv_sources: dict[str, int] = {}  # scanner source MAC → count
         self.device.add_position_callback(self._handle_position_notification)
-        # Provide a callback so establish_connection can fetch a fresh BLEDevice
-        # on each retry. If we know which proxy holds the bond (single-bond
-        # device — see ryse.py:_bonded_source) prefer that proxy; otherwise
-        # fall back to the highest-RSSI connectable BLEDevice.
-        self.device._ble_device_callback = self._pick_ble_device
 
     def async_start(self):
-        """Start the coordinator — called via entry.async_on_unload.
-
-        Returns a cancel callback that cleans up all registrations.
-        """
-        # Battery-powered shades may advertise infrequently.  Tell HA's
-        # availability tracker to use a generous fallback so the device
-        # isn't marked unavailable between advertisements.
-        bluetooth.async_set_fallback_availability_interval(
-            self.hass,
-            self.address,
-            900.0,  # 15 minutes
-        )
-        cancel = super().async_start()
-        # Start the initialization timer
-        self._init_task = self.hass.async_create_task(self._async_init_timeout())
-        # In active mode, establish connection on startup
-        if self.device._active_mode:
-            self._reconnect_task = self.hass.async_create_task(self._active_reconnect())
-
-        def _cancel():
-            cancel()
-            self._cancel_reconnect_task()
-            if hasattr(self, "_init_task") and not self._init_task.done():
-                self._init_task.cancel()
-
-        return _cancel
-
-    def _cancel_reconnect_task(self):
-        """Cancel any running reconnect task."""
-        if self._reconnect_task and not self._reconnect_task.done():
-            self._reconnect_task.cancel()
-            self._reconnect_task = None
-
-    def _pick_ble_device(self):
-        """Return a BLEDevice, preferring the bonded proxy if known/visible."""
-        bonded = self.device._bonded_source
-        if bonded:
-            for sd in async_scanner_devices_by_address(self.hass, self.address, connectable=True):
-                if getattr(sd.scanner, "source", None) == bonded:
-                    return sd.ble_device
-            _LOGGER.debug(
-                "[Coordinator] %s: bonded proxy %s not visible, falling back",
-                self._name,
-                bonded,
-            )
-        return bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
-
-    async def _async_init_timeout(self):
-        await asyncio.sleep(DEFAULT_INIT_TIMEOUT)
-        if self._initializing:
-            self._initializing = False
-            if not self._available:
-                _LOGGER.info(
-                    f"Device {self._name} did not become available after {DEFAULT_INIT_TIMEOUT}s, marking as unavailable."
-                )
-            self.async_update_listeners()
+        # Battery shades advertise infrequently — give the availability
+        # tracker generous slack before marking unavailable.
+        bluetooth.async_set_fallback_availability_interval(self.hass, self.address, 900.0)
+        return super().async_start()
 
     # ------------------------------------------------------------------
-    # Base class overrides — these replace the manual callback registrations.
-    # ActiveBluetoothDataUpdateCoordinator calls these automatically.
+    # Advertisement handling
     # ------------------------------------------------------------------
 
     @callback
     def _async_handle_bluetooth_event(self, service_info, change):
-        """Handle advertisement data from the base class callback."""
-        # Update the BLE device reference, but if we have a bonded proxy,
-        # only accept advertisements from THAT proxy. Updating from a
-        # non-bonded proxy would cause the next connect to route through
-        # an adapter without a valid LTK and trip "Insufficient auth".
+        now = time.monotonic()
+        self._adv_count += 1
+        if self._adv_first_ts is None:
+            self._adv_first_ts = now
+        gap_ms = (now - self._adv_last_ts) * 1000 if self._adv_last_ts is not None else None
+        self._adv_last_ts = now
+        source = getattr(service_info, "source", None)
+        if source:
+            self._adv_sources[source] = self._adv_sources.get(source, 0) + 1
+        rssi = getattr(service_info, "rssi", None)
+        # Per-adv detail at debug only; periodic summary at info so it's visible.
+        _LOGGER.debug(
+            "[%s] ADV #%d rssi=%s source=%s gap=%s position=%s battery=%s",
+            self._name,
+            self._adv_count,
+            rssi,
+            source,
+            f"{gap_ms:.0f}ms" if gap_ms is not None else "first",
+            getattr(service_info, "manufacturer_data", {}),
+            None,
+        )
+        if now - self._adv_last_summary_ts > 60:
+            elapsed = now - self._adv_first_ts if self._adv_first_ts else 1
+            rate = self._adv_count / max(elapsed, 1)
+            _LOGGER.info(
+                "[%s] adv stats: %d total in %.0fs (%.2f/sec), sources=%s",
+                self._name,
+                self._adv_count,
+                elapsed,
+                rate,
+                self._adv_sources,
+            )
+            self._adv_last_summary_ts = now
+
         if hasattr(service_info, "device") and service_info.device:
-            bonded = self.device._bonded_source
-            adv_source = getattr(service_info, "source", None)
-            if not bonded or adv_source == bonded:
-                self.device.set_ble_device(service_info.device)
+            self.device.set_ble_device(service_info.device)
         adv = self.device.parse_advertisement(service_info)
         if adv.get("position") is not None:
             self._position = adv["position"]
-            self._ready_event.set()
         if adv.get("battery") is not None:
             self._battery = adv["battery"]
             for cb in self.device._battery_callbacks:
@@ -141,288 +116,68 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                     self.hass.async_create_task(cb(adv["battery"]))
                 else:
                     cb(adv["battery"])
-            for cb in self.device._adv_callbacks:
-                if inspect.iscoroutinefunction(cb):
-                    self.hass.async_create_task(cb())
-                else:
-                    cb()
-        self._last_adv = datetime.now()
+        for cb in self.device._adv_callbacks:
+            if inspect.iscoroutinefunction(cb):
+                self.hass.async_create_task(cb())
+            else:
+                cb()
         self._available = True
-        if self._initializing:
-            self._initializing = False
-        if self._was_unavailable:
-            _LOGGER.info(f"Device {self._name} is online")
-            self._was_unavailable = False
         self.async_update_listeners()
-        # Proactively reconnect in active mode when we hear an advertisement
-        # and the connection is down (recovers from silent drops).
-        if not self.device._is_connected and not self.device._connecting:
-            if self._reconnect_task and not self._reconnect_task.done():
-                return
-            if self.device._active_mode:
-                now = datetime.now()
-                if self._last_warm_connect_attempt is None or (now - self._last_warm_connect_attempt) > timedelta(
-                    seconds=60
-                ):
-                    _LOGGER.info(
-                        "[Coordinator] Active mode: reconnecting on advertisement for %s",
-                        self._name,
-                    )
-                    self.hass.async_create_task(self._warm_connect())
 
     @callback
     def _async_handle_unavailable(self, service_info):
-        """Handle when device stops advertising (base class callback).
-
-        HA's availability tracker already applies the fallback interval
-        we set in async_start(), so this only fires after 15 minutes
-        of silence.  No manual leniency check needed.
-        """
-        _LOGGER.warning(
-            "[Coordinator] %s is unavailable (address: %s)",
-            self._name,
-            self.device.address,
-        )
+        _LOGGER.warning("[Coordinator] %s is unavailable (%s)", self._name, self.address)
         self._available = False
-        self._was_unavailable = True
         self.async_update_listeners()
 
-    # ------------------------------------------------------------------
-    # Connection management
-    # ------------------------------------------------------------------
-
-    async def _warm_connect(self):
-        """Proactively connect after hearing an advertisement."""
-        async with self.device._connection_semaphore:
-            try:
-                await self.device.disconnect()
-                if await self.device.connect():
-                    self._last_warm_connect_attempt = None
-                    return
-            except Exception as e:
-                _LOGGER.debug("[Coordinator] Warm connect failed for %s: %s", self._name, e)
-        self._last_warm_connect_attempt = datetime.now()
-
     @callback
-    def _handle_position_notification(self, position: int):
-        """Handle real-time position update from GATT notification."""
+    def _handle_position_notification(self, position: int) -> None:
+        """Real-time position update from a GATT notification while we're connected."""
+        _LOGGER.info("[%s] position notification: %d", self._name, position)
         self._position = position
         self._available = True
-        if self._initializing:
-            self._initializing = False
         self.async_update_listeners()
 
-    @callback
-    def _handle_device_disconnected(self):
-        """Handle unexpected BLE disconnection from the device."""
-        if not self.device._active_mode:
-            return
-        if self._reconnect_task and not self._reconnect_task.done():
-            return
-        _LOGGER.info("[Coordinator] Active mode: scheduling reconnect for %s", self._name)
-        self._reconnect_task = self.hass.async_create_task(self._active_reconnect())
-
-    async def _active_reconnect(self):
-        """Reconnect in active mode with exponential backoff."""
-        delay = self.device._active_reconnect_delay
-        for attempt in range(self.device._max_retry_attempts):
-            await asyncio.sleep(delay)
-            async with self.device._connection_semaphore:
-                await self.device.disconnect()
-                ble_device = self._pick_ble_device()
-                if not ble_device:
-                    _LOGGER.debug(
-                        "[Coordinator] Active reconnect attempt %d: no BLE device for %s",
-                        attempt + 1,
-                        self._name,
-                    )
-                    delay = min(delay * 2, 60)
-                    continue
-                self.device.set_ble_device(ble_device)
-                if await self.device.connect():
-                    _LOGGER.info("[Coordinator] Active mode reconnected to %s", self._name)
-                    return
-            delay = min(delay * 2, 60)
-        _LOGGER.warning(
-            "[Coordinator] Active mode reconnect failed for %s after %d attempts, scheduling slow retry",
-            self._name,
-            self.device._max_retry_attempts,
-        )
-        self._last_warm_connect_attempt = None
-        self._reconnect_task = self.hass.async_create_task(self._slow_reconnect_loop())
-
-    async def _slow_reconnect_loop(self):
-        """Slow periodic reconnect every 5 minutes until connected."""
-        while True:
-            await asyncio.sleep(300)
-            if self.device._is_connected:
-                _LOGGER.debug(
-                    "[Coordinator] Slow reconnect loop: %s already connected, stopping",
-                    self._name,
-                )
-                return
-            async with self.device._connection_semaphore:
-                _LOGGER.info("[Coordinator] Slow reconnect attempt for %s", self._name)
-                await self.device.disconnect()
-                ble_device = self._pick_ble_device()
-                if not ble_device:
-                    _LOGGER.debug(
-                        "[Coordinator] Slow reconnect: no BLE device for %s, will retry",
-                        self._name,
-                    )
-                    continue
-                self.device.set_ble_device(ble_device)
-                if await self.device.connect():
-                    _LOGGER.info("[Coordinator] Slow reconnect succeeded for %s", self._name)
-                    self._last_warm_connect_attempt = None
-                    return
-
     # ------------------------------------------------------------------
-    # Polling (passive mode only)
+    # Polling — disabled. Advertisements carry position + battery, so
+    # there's no need for a periodic GATT poll. The base class still
+    # wants the callbacks to exist.
     # ------------------------------------------------------------------
 
     @callback
     def _needs_poll(self, service_info, seconds_since_last_poll):
-        if self.device._active_mode:
-            return False
-        ble_device = self._pick_ble_device()
-        should_poll = (
-            self.hass.state == self.hass.CoreState.running
-            and self.device.poll_needed(seconds_since_last_poll)
-            and bool(ble_device)
-        )
-        _LOGGER.debug(
-            "[Coordinator] _needs_poll: seconds=%s, ble_device=%s, poll=%s",
-            seconds_since_last_poll,
-            bool(ble_device),
-            should_poll,
-        )
-        return should_poll
+        return False
 
-    async def _async_update(self, service_info):
-        _LOGGER.debug(
-            "[Coordinator] _async_update called for %s (address: %s)",
-            self._name,
-            self.address,
-        )
-        ble_device = self._pick_ble_device()
-        if not ble_device:
-            _LOGGER.warning("[Coordinator] No BLE device found for %s during poll", self._name)
-            self._available = False
-            self._was_unavailable = True
-            self.async_update_listeners()
-            return
-        self.device.set_ble_device(ble_device)
-        if not await self.device.connect():
-            _LOGGER.warning("[Coordinator] Could not connect to %s during poll", self._name)
-            self._available = False
-            self._was_unavailable = True
-            self.async_update_listeners()
-            return
-        try:
-            data = await self.device.read_gatt(HARDCODED_UUIDS["rx_uuid"])
-            _LOGGER.debug(
-                "[Coordinator] GATT poll data for %s: raw=%s (hex=%s)",
-                self._name,
-                list(data) if data else None,
-                data.hex() if data else None,
-            )
-            if len(data) >= 3:
-                self._position = data[1]
-                self._battery = data[2]
-                self._available = True
-                if self._initializing:
-                    self._initializing = False
-                if self._was_unavailable:
-                    _LOGGER.info(f"Device {self._name} is online (via GATT poll)")
-                    self._was_unavailable = False
-        except Exception as e:
-            _LOGGER.error(f"[Coordinator] GATT poll failed: {e}")
-            self._available = False
-            self._was_unavailable = True
-            self.async_update_listeners()
-        self.async_update_listeners()
-
-    # ------------------------------------------------------------------
-    # Properties and helpers
-    # ------------------------------------------------------------------
-
-    async def async_wait_ready(self, timeout=30):
-        try:
-            async with asyncio.timeout(timeout):
-                await self._ready_event.wait()
-                return True
-        except TimeoutError:
-            return False
-
-    @property
-    def position(self):
-        return self._position
-
-    @property
-    def battery(self):
-        return self._battery
-
-    @property
-    def available(self):
-        return self._available
-
-    @property
-    def initializing(self):
-        return self._initializing
-
-    async def async_update_battery(self, battery_level: int | None) -> None:
-        """Update the battery level and notify listeners."""
-        self._battery = battery_level
-        self.async_update_listeners()
-
-    @property
-    def name(self):
-        return self._name
+    async def _noop_poll(self, service_info):
+        return
 
     # ------------------------------------------------------------------
     # Command execution
     # ------------------------------------------------------------------
 
-    async def _ensure_connected(self) -> bool:
-        """Ensure the device is connected before performing operations."""
-        client = self.device.client
-        if not client or not client.is_connected:
-            async with self.device._connection_semaphore:
-                await self.device.disconnect()
-                ble_device = self._pick_ble_device()
-                if not ble_device:
-                    self._available = False
-                    self._was_unavailable = True
-                    self.async_update_listeners()
-                    return False
-                self.device.set_ble_device(ble_device)
-                if not await self.device.connect():
-                    self._available = False
-                    self._was_unavailable = True
-                    if self.device._needs_repair:
-                        self.device._needs_repair = False
-                        ir.async_create_issue(
-                            self.hass,
-                            DOMAIN,
-                            f"ble_auth_failed_{self.address}",
-                            is_fixable=True,
-                            severity=ir.IssueSeverity.ERROR,
-                            translation_key="ble_auth_failed",
-                            translation_placeholders={"name": self._name},
-                        )
-                    self.async_update_listeners()
-                    return False
-        return True
-
-    async def _execute_command(self, operation, *args) -> None:
-        """Execute a BLE command with one retry on connection drop."""
+    async def _execute_command(self, op, *args) -> None:
+        """Connect → run op → disconnect. One retry on transient failure."""
         for attempt in range(2):
-            if not await self._ensure_connected():
+            ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
+            if not ble_device:
+                _LOGGER.warning("[Coordinator] No BLE device for %s", self._name)
+                self._available = False
+                self.async_update_listeners()
                 return
+
+            self.device.set_ble_device(ble_device)
+            if not await self.device.connect():
+                if attempt == 0:
+                    await asyncio.sleep(2)
+                    continue
+                self._available = False
+                self.async_update_listeners()
+                return
+
             try:
-                await operation(*args)
+                await op(*args)
                 ir.async_delete_issue(self.hass, DOMAIN, f"ble_auth_failed_{self.address}")
+                await self.device.disconnect()
                 return
             except (BleakError, ConnectionError) as e:
                 err_str = str(e)
@@ -433,9 +188,6 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                     e,
                 )
                 if "Insufficient authentication" in err_str:
-                    # Auto re-pair can't succeed without a physical PAIR
-                    # press, so don't retry it — surface the repair issue
-                    # and let the user drive the recovery flow.
                     ir.async_create_issue(
                         self.hass,
                         DOMAIN,
@@ -448,30 +200,49 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
                 await self.device.disconnect()
                 if attempt == 0:
                     await asyncio.sleep(2)
-                    _LOGGER.info("[Coordinator] Retrying command for %s", self._name)
+
         # Both attempts failed
         self._available = False
-        self._was_unavailable = True
         self.async_update_listeners()
-        if self.device._active_mode and (not self._reconnect_task or self._reconnect_task.done()):
-            _LOGGER.info(
-                "[Coordinator] Scheduling reconnect for %s after command failure",
-                self._name,
-            )
-            self._reconnect_task = self.hass.async_create_task(self._active_reconnect())
 
     async def async_set_position(self, position: int) -> None:
-        """Set the cover position."""
         await self._execute_command(self.device.set_position, position)
 
     async def async_open_cover(self) -> None:
-        """Open the cover."""
-        if self.position is not None and self.position == 0:
+        if self._position is not None and self._position == 0:
             return
         await self._execute_command(self.device.open)
 
     async def async_close_cover(self) -> None:
-        """Close the cover."""
-        if self.position is not None and self.position == 100:
+        if self._position is not None and self._position == 100:
             return
         await self._execute_command(self.device.close)
+
+    # ------------------------------------------------------------------
+    # Properties used by entity classes
+    # ------------------------------------------------------------------
+
+    @property
+    def position(self) -> int | None:
+        return self._position
+
+    @property
+    def battery(self) -> int | None:
+        return self._battery
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    @property
+    def initializing(self) -> bool:
+        # No init phase anymore — adv-driven, state shows up when it shows up.
+        return False
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def async_update_battery(self, battery_level: int | None) -> None:
+        self._battery = battery_level
+        self.async_update_listeners()
