@@ -238,6 +238,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         pass
 
     device = RyseDevice(address)
+    device._bonded_source = entry.data.get("bonded_source")
+    if device._bonded_source:
+        _LOGGER.info(
+            "[init] %s pinned to bonded proxy %s",
+            entry.data.get("name", address),
+            device._bonded_source,
+        )
     _LOGGER.info("[init] Created RyseDevice for %s", address)
 
     # Lazy import — keeps the package import-clean on non-Linux test runners.

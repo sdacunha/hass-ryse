@@ -212,9 +212,17 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
 
             # Pair on this proxy to establish bonding keys
+            bonded_source = None
             try:
                 await client.pair()
                 _LOGGER.info("Paired with device on primary proxy: %s", address)
+                # Record which adapter/proxy holds the bond — RYSE stores
+                # exactly one. Future connections MUST go through this
+                # adapter or they trip Insufficient authentication (5).
+                details = getattr(ble_device, "details", None)
+                if isinstance(details, dict):
+                    bonded_source = details.get("source")
+                _LOGGER.info("Bond captured on adapter source=%s for %s", bonded_source, address)
             except Exception as e:
                 _LOGGER.warning("Pairing on primary proxy failed (may not be required): %s", e)
 
@@ -229,6 +237,8 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             "rx_uuid": HARDCODED_UUIDS["rx_uuid"],
             "tx_uuid": HARDCODED_UUIDS["tx_uuid"],
         }
+        if bonded_source:
+            self._pending_entry_data["bonded_source"] = bonded_source
         return await self.async_step_name()
 
     async def async_step_name(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

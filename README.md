@@ -55,16 +55,33 @@ Settings take effect immediately without restarting Home Assistant.
 
 ## Development
 
-This repo follows the `ludeeus/integration_blueprint` devcontainer pattern (the de-facto community standard for HA custom integrations).
+Local dev runs Home Assistant directly against this checkout — no Docker. You need Python 3.13+ and a Home Assistant install in a venv.
 
-1. Open the repo in VS Code or Cursor
-2. **Dev Containers: Reopen in Container** — `scripts/setup` installs Home Assistant from `requirements.txt`
-3. Run **scripts/develop** (or the **Run Home Assistant on port 8123** task)
-4. Open http://localhost:8123 and go through HA onboarding
-5. Add the **ESPHome** integration and point it at a Bluetooth proxy on your network
-6. RYSE shades auto-discover via the proxy
+1. Create a venv and install Home Assistant:
 
-The `custom_components/ryse/` directory is exposed via `PYTHONPATH` — edits take effect on HA restart. HA's persistent state lives in `config/` (gitignored).
+        python3 -m venv ~/ha_dev/venv
+        source ~/ha_dev/venv/bin/activate
+        pip install homeassistant
+
+2. Symlink this repo's custom component into HA's config dir:
+
+        mkdir -p ~/ha_dev/config/custom_components
+        ln -s "$(pwd)/custom_components/ryse" ~/ha_dev/config/custom_components/ryse
+
+3. Run Home Assistant:
+
+        ~/ha_dev/venv/bin/hass -c ~/ha_dev/config --debug
+
+4. Open <http://localhost:8123>, go through onboarding.
+5. Add the **ESPHome** integration, point it at one of your Bluetooth proxies.
+6. RYSE shades auto-discover via the proxy.
+
+Edits to `custom_components/ryse/` take effect on HA restart (Ctrl-C the running `hass` and re-run).
+
+### Tests
+
+    pip install -r requirements_test.txt
+    python -m pytest tests/ -v
 
 ## Support & Feedback
 If you have questions, suggestions, or want to contribute, please open an issue or pull request on GitHub! My time is limited, so I will do my best to respond to issues and pull requests, I mostly created this integration for my own use.

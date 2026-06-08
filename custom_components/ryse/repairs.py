@@ -82,7 +82,7 @@ class BleAuthFailedRepairFlow(RepairsFlow):
 
         try:
             await client.pair()
-            _LOGGER.info("[Repairs] Successfully paired %s", address)
+            _LOGGER.info("[Repairs] Successfully paired %s via %s", address, best_source)
         except Exception as err:
             _LOGGER.error("[Repairs] Pair failed for %s: %s", address, err)
             try:
@@ -95,6 +95,15 @@ class BleAuthFailedRepairFlow(RepairsFlow):
             await client.disconnect()
         except Exception:
             pass
+
+        # Pin all future connections to this proxy and persist on the
+        # config entry so the pin survives HA restart.
+        if best_source:
+            coordinator.device._bonded_source = best_source
+            entry = self.hass.config_entries.async_get_entry(coordinator._entry_id)
+            if entry is not None:
+                self.hass.config_entries.async_update_entry(entry, data={**entry.data, "bonded_source": best_source})
+            _LOGGER.info("[Repairs] Pinned %s to bonded proxy %s", address, best_source)
 
         ir.async_delete_issue(self.hass, DOMAIN, self.issue_id)
         return self.async_create_entry(data={})

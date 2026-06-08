@@ -38,6 +38,10 @@ class RyseDevice:
         self._lock = asyncio.Lock()
         self._connection_timeout = DEFAULT_CONNECTION_TIMEOUT
         self._max_retry_attempts = DEFAULT_MAX_RETRY_ATTEMPTS
+        # MAC of the proxy/adapter that holds the bond. Set after pair() in
+        # config_flow or repairs flow. Persisted on entry.data. The shade
+        # stores ONE bond; reconnects must go through this proxy or auth-5.
+        self._bonded_source: str | None = None
         self._position_callbacks: list = []
         self._battery_callbacks: list = []
         self._adv_callbacks: list = []

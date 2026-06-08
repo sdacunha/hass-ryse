@@ -11,7 +11,6 @@ import pytest
 
 from custom_components.ryse.const import DOMAIN
 
-
 # The enable_bluetooth fixture requires Linux dbus access (bluetooth_adapters).
 # On macOS/Windows, we skip tests that need the full HA bluetooth stack.
 _HAS_BLUETOOTH_FIXTURE = sys.platform == "linux"
@@ -67,26 +66,20 @@ def mock_entry_factory():
 
 @pytest.fixture
 def mock_ryse_device():
-    """Return a MagicMock for RyseDevice with sensible defaults."""
+    """Return a MagicMock for RyseDevice mirroring the simplified API."""
     device = MagicMock()
     device.address = "AA:BB:CC:DD:EE:FF"
+    device.ble_device = None
     device.client = MagicMock()
     device.client.is_connected = True
-    device.client.pair = AsyncMock()
-    device._is_connected = True
-    device._connecting = False
-    device._bonded_source = None
-    device._active_mode = False
-    device._max_retry_attempts = 3
-    device._active_reconnect_delay = 5
-    device._poll_interval = 300
-    device._idle_disconnect_timeout = 60
+    device.is_connected = True
     device._connection_timeout = 10
+    device._max_retry_attempts = 5
+    device._bonded_source = None
+    device._position_callbacks = []
     device._battery_callbacks = []
-    device._unavailable_callbacks = []
     device._adv_callbacks = []
     device._disconnect_callbacks = []
-    device._position_callbacks = []
     device.connect = AsyncMock(return_value=True)
     device.disconnect = AsyncMock()
     device.set_position = AsyncMock()
@@ -95,13 +88,13 @@ def mock_ryse_device():
     device.read_gatt = AsyncMock(return_value=bytes([0x00, 50, 85]))
     device.write_gatt = AsyncMock()
     device.set_ble_device = MagicMock()
+    device.get_battery_level = MagicMock(return_value=None)
     device.add_disconnect_callback = MagicMock(side_effect=lambda cb: device._disconnect_callbacks.append(cb))
     device.add_battery_callback = MagicMock(side_effect=lambda cb: device._battery_callbacks.append(cb))
-    device.add_unavailable_callback = MagicMock(side_effect=lambda cb: device._unavailable_callbacks.append(cb))
+    device.add_unavailable_callback = MagicMock()
     device.add_adv_callback = MagicMock(side_effect=lambda cb: device._adv_callbacks.append(cb))
     device.add_position_callback = MagicMock(side_effect=lambda cb: device._position_callbacks.append(cb))
     device.parse_advertisement = MagicMock(return_value={"position": 50, "battery": 85})
-    device.poll_needed = MagicMock(return_value=False)
     return device
 
 

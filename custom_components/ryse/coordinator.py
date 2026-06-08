@@ -15,6 +15,7 @@ import time
 
 from bleak.exc import BleakError
 from homeassistant.components import bluetooth
+from homeassistant.components.bluetooth import async_scanner_devices_by_address
 from homeassistant.components.bluetooth.active_update_coordinator import (
     ActiveBluetoothDataUpdateCoordinator,
 )
@@ -64,6 +65,26 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
         bluetooth.async_set_fallback_availability_interval(self.hass, self.address, 900.0)
         return super().async_start()
 
+    def _pick_ble_device(self):
+        """Return a BLEDevice, preferring the bonded proxy if known/visible.
+
+        The shade is single-bond. If we have a known bonded source, we MUST
+        route through it; falling back to highest-RSSI would trip auth-5
+        on a proxy without the bond. We only fall back when the bonded
+        proxy isn't currently visible at all (proxy offline, etc.).
+        """
+        bonded = getattr(self.device, "_bonded_source", None)
+        if bonded:
+            for sd in async_scanner_devices_by_address(self.hass, self.address, connectable=True):
+                if getattr(sd.scanner, "source", None) == bonded:
+                    return sd.ble_device
+            _LOGGER.debug(
+                "[Coordinator] %s: bonded proxy %s not visible, falling back to any",
+                self._name,
+                bonded,
+            )
+        return bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
+
     # ------------------------------------------------------------------
     # Advertisement handling
     # ------------------------------------------------------------------
@@ -105,7 +126,11 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
             self._adv_last_summary_ts = now
 
         if hasattr(service_info, "device") and service_info.device:
-            self.device.set_ble_device(service_info.device)
+            # Only let the bonded proxy update the stored BLEDevice.
+            # Otherwise reconnects could drift to a non-bonded adapter.
+            bonded = getattr(self.device, "_bonded_source", None)
+            if not bonded or source == bonded:
+                self.device.set_ble_device(service_info.device)
         adv = self.device.parse_advertisement(service_info)
         if adv.get("position") is not None:
             self._position = adv["position"]
@@ -158,7 +183,7 @@ class RyseCoordinator(ActiveBluetoothDataUpdateCoordinator):
     async def _execute_command(self, op, *args) -> None:
         """Connect → run op → disconnect. One retry on transient failure."""
         for attempt in range(2):
-            ble_device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
+            ble_device = self._pick_ble_device()
             if not ble_device:
                 _LOGGER.warning("[Coordinator] No BLE device for %s", self._name)
                 self._available = False
