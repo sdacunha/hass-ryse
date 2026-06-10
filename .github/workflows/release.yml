@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
 
+# Serialize pushes to main so a second push waits for the prior run's
+# version bump to land before it builds. cancel-in-progress: false →
+# queued runs are NOT cancelled, just made to wait.
+concurrency:
+  group: auto-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -50,12 +57,21 @@ jobs:
       - name: Bump version
         id: bump
         run: |
-          # Read current version from manifest
-          CURRENT=$(jq -r '.version' custom_components/ryse/manifest.json)
-          echo "Current manifest version: $CURRENT"
+          # Source of truth for the version is the latest TAG, not the
+          # manifest. If two pushes race, both could see the same manifest
+          # at their respective checkout SHAs — but they always see the
+          # full tag history (fetch-depth: 0), so deriving from the tag
+          # is race-free.
+          LATEST_TAG="${{ steps.latest_tag.outputs.tag }}"
+          TAG_VERSION="${LATEST_TAG#v}"
+          MANIFEST_VERSION=$(jq -r '.version' custom_components/ryse/manifest.json)
 
-          # Split into parts and increment patch
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          # Take the higher of the two so we never accidentally downgrade
+          # (e.g., if the manifest is ahead of any tag on first release).
+          BASE_VERSION=$(printf '%s\n%s\n' "$TAG_VERSION" "$MANIFEST_VERSION" | sort -V | tail -n1)
+          echo "Tag version: $TAG_VERSION; manifest version: $MANIFEST_VERSION; base: $BASE_VERSION"
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
           NEW_PATCH=$((PATCH + 1))
           NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
           echo "New version: $NEW_VERSION"
@@ -95,6 +111,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add custom_components/ryse/manifest.json
           git commit -m "Bump version to ${{ steps.bump.outputs.version }} [skip ci]"
+          # Defensive: if anything landed on main between checkout and now,
+          # rebase the bump onto it before pushing. concurrency above
+          # already serializes runs, but this is the belt to its suspenders.
+          git pull --rebase origin main
           git push
 
       - name: Create tag and release
