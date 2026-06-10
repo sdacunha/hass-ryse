@@ -54,28 +54,18 @@ The RYSE shade stores exactly one BLE bond at a time. With multiple ESPHome Blue
 
 ## Development
 
-Local dev runs Home Assistant directly against this checkout — no Docker. You need Python 3.13+ and a Home Assistant install in a venv.
+Local dev runs Home Assistant directly against this checkout — no Docker required. The layout follows [`ludeeus/integration_blueprint`](https://github.com/ludeeus/integration_blueprint), the community-standard pattern for HA custom integrations.
 
-1. Create a venv and install Home Assistant:
+You need Python 3.13+. Inside a fresh venv:
 
-        python3 -m venv ~/ha_dev/venv
-        source ~/ha_dev/venv/bin/activate
-        pip install homeassistant
+    python3 -m venv .venv
+    source .venv/bin/activate
+    scripts/setup        # installs HA + deps from requirements.txt
+    scripts/develop      # starts HA against ./config with this repo's custom_component on PYTHONPATH
 
-2. Symlink this repo's custom component into HA's config dir:
+Then open <http://localhost:8123> and go through onboarding. Add the **ESPHome** integration, point it at one of your Bluetooth proxies, and RYSE shades auto-discover.
 
-        mkdir -p ~/ha_dev/config/custom_components
-        ln -s "$(pwd)/custom_components/ryse" ~/ha_dev/config/custom_components/ryse
-
-3. Run Home Assistant:
-
-        ~/ha_dev/venv/bin/hass -c ~/ha_dev/config --debug
-
-4. Open <http://localhost:8123>, go through onboarding.
-5. Add the **ESPHome** integration, point it at one of your Bluetooth proxies.
-6. RYSE shades auto-discover via the proxy.
-
-Edits to `custom_components/ryse/` take effect on HA restart (Ctrl-C the running `hass` and re-run).
+Edits to `custom_components/ryse/` take effect on HA restart (Ctrl-C the running `hass` and re-run `scripts/develop`). HA's state persists in `./config/` (gitignored).
 
 ### Tests
 

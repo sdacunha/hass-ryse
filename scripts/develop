@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Run Home Assistant with this repo's custom_component live-mounted via
+# PYTHONPATH. HA's state persists in ./config (gitignored). Use Ctrl-C
+# to stop.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# Create a local config dir on first run.
+if [[ ! -d "${PWD}/config" ]]; then
+    mkdir -p "${PWD}/config"
+    hass --script ensure_config -c "${PWD}/config"
+fi
+
+# Expose this checkout's custom_components/ to HA without a symlink.
+export PYTHONPATH="${PYTHONPATH:-}:${PWD}/custom_components"
+
+hass --config "${PWD}/config" --debug
