@@ -34,9 +34,17 @@
       }
     },
     "error": {
-      "not_in_pairing_mode": "The selected device is not in pairing mode. Please press the pairing button on your RYSE Smart Shade and try again.",
-      "no_devices_found": "No RYSE Smart Shades found. Please make sure your device is powered on and in pairing mode, then try again.",
-      "failed_to_pair": "Failed to pair with the RYSE device. Please ensure it is in pairing mode and not already paired with another device, then try again."
+      "not_in_pairing_mode": "The selected device is not in pairing mode. Please press the PAIR button on your RYSE SmartShade and try again.",
+      "no_devices_found": "No RYSE SmartShades found. Make sure your device is powered on and in pairing mode (press the PAIR button), then try again.",
+      "failed_to_pair": "Failed to pair with the RYSE device. Make sure it is in pairing mode and not already bonded to another Bluetooth host, then try again."
+    },
+    "abort": {
+      "device_not_found": "Couldn't reach the RYSE SmartShade at {address}. Confirm the shade is powered on, in pairing mode (press the PAIR button), and within range of a Bluetooth proxy.",
+      "cannot_connect": "Couldn't open a Bluetooth connection to {address}.\n\nDetail: {error}\n\nMake sure the shade is in pairing mode (PAIR button) and that a Bluetooth proxy is online and within range.",
+      "pairing_failed_auth": "Pairing failed with an authentication error. The shade may already be bonded to another adapter, or the bond table is full.\n\nDetail: {error}\n\nTo recover: factory-reset the shade by holding the PAIR button until the LED flashes rapidly, then try adding it again.",
+      "pairing_failed": "Pairing with {address} failed.\n\nDetail: {error}\n\nMake sure the shade is in pairing mode (PAIR button) and try again.",
+      "not_supported": "This device is not a RYSE SmartShade.",
+      "no_device_selected": "No device was selected for pairing."
     }
   },
   "issues": {
@@ -46,13 +54,14 @@
         "step": {
           "init": {
             "title": "Re-pair {name}",
-            "description": "The Bluetooth session for **{name}** has lost its pairing.\n\n1. Press the **PAIR button** on your RYSE SmartShade\n2. Click **Submit** to reconnect and re-pair\n\nYour existing settings will be kept."
+            "description": "The Bluetooth bond for **{name}** has been lost. To recover:\n\n**Before clicking Submit:**\n1. Walk over to your RYSE SmartShade\n2. Press the **PAIR button** — the shade's LED should start flashing\n\n**Once the LED is flashing:**\n3. Come back here and click **Submit** within the next 30 seconds\n\nYour existing settings (name, options) will be kept. If the LED isn't flashing when you click Submit, the re-pair will fail and you'll need to start over."
           }
         },
         "abort": {
-          "device_not_found": "Could not find the device. Make sure it is powered on and nearby.",
-          "cannot_connect": "Could not connect to the device. Make sure it is in pairing mode and try again.",
-          "repair_failed": "Re-pairing failed. Try pressing the PAIR button again and retry."
+          "device_not_found": "No advertisements have been received from **{name}**'s shade. Make sure it's powered on and within range of a Bluetooth proxy. If you've replaced or moved a proxy recently, restart Home Assistant.",
+          "cannot_connect": "Couldn't establish a Bluetooth connection. The proxy may be out of range, or another integration may be holding the connection. Try moving the proxy closer or restart it.",
+          "not_in_pairing_mode": "The shade isn't in pairing mode. Press the **PAIR button** on the shade (the LED should start flashing), then return here and try again within 30 seconds.",
+          "repair_failed": "Re-pairing failed during the pair handshake. The shade may have exited pairing mode before the handshake completed. Press the PAIR button again and retry — be quicker clicking Submit this time."
         }
       }
     }

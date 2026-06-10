@@ -44,14 +44,13 @@ After pairing a device, click **Configure** on the integration entry to adjust s
 
 | Setting | Default | Description |
 | ------- | ------- | ----------- |
-| **Active mode** | Off | Maintain a persistent Bluetooth connection and auto-reconnect on disconnect. Recommended for plugged-in blinds. Not recommended for battery-powered blinds as it will drain the battery. |
-| **Poll interval** | 300s | How often to poll the device via Bluetooth when advertisements stop (60–3600s). |
-| **Idle disconnect timeout** | 60s | Disconnect the Bluetooth connection after this many seconds of inactivity (10–300s). Ignored when active mode is enabled. |
-| **Connection timeout** | 10s | How long to wait for a Bluetooth connection attempt (5–60s). |
-| **Max retry attempts** | 3 | Number of times to retry a failed connection (1–10). |
-| **Active reconnect delay** | 5s | Seconds to wait before reconnecting after an unexpected disconnect in active mode (1–30s). |
+| **Disable battery sensor** | Off | Hide the battery sensor for this device. Useful for plugged-in blinds that report unreliable battery values. |
 
-Settings take effect immediately without restarting Home Assistant.
+The integration uses a connect-on-demand model — there's no persistent connection to tune, no keepalive, no polling interval. Commands connect, write, and disconnect immediately. Position and battery come from BLE advertisements.
+
+### How bonding works
+
+The RYSE shade stores exactly one BLE bond at a time. With multiple ESPHome Bluetooth proxies in range, the integration pins each device to whichever proxy was used during pairing (`bonded_source` saved on the config entry) so reconnects route through the right adapter. If you ever move the shade closer to a different proxy, just run the repair flow to re-pair through the new strongest-RSSI proxy.
 
 ## Development
 

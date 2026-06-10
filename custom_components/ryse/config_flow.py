@@ -186,51 +186,71 @@ class RyseBLEDeviceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         _LOGGER.info("Attempting to connect to RYSE device at %s", address)
+
+        ble_device = async_ble_device_from_address(self.hass, address)
+        if not ble_device:
+            _LOGGER.error("Device not found at address: %s", address)
+            return self.async_abort(
+                reason="device_not_found",
+                description_placeholders={"address": address},
+            )
+
         try:
-            ble_device = async_ble_device_from_address(self.hass, address)
-            if not ble_device:
-                _LOGGER.error("Device not found at address: %s", address)
-                return self.async_abort(reason="device_not_found")
-
             client = await establish_connection(BleakClient, ble_device, address, max_attempts=3)
-
-            if not client.is_connected:
-                _LOGGER.error("Failed to connect to device: %s", address)
-                return self.async_abort(reason="cannot_connect")
-
-            _LOGGER.info("Connected to device: %s", address)
-
-            try:
-                await client.start_notify(HARDCODED_UUIDS["rx_uuid"], lambda s, d: None)
-                await client.stop_notify(HARDCODED_UUIDS["rx_uuid"])
-                _LOGGER.info("Verified communication with device: %s", address)
-            except Exception as e:
-                _LOGGER.warning(
-                    "Could not verify notifications for %s: %s, proceeding anyway",
-                    address,
-                    e,
-                )
-
-            # Pair on this proxy to establish bonding keys
-            bonded_source = None
-            try:
-                await client.pair()
-                _LOGGER.info("Paired with device on primary proxy: %s", address)
-                # Record which adapter/proxy holds the bond — RYSE stores
-                # exactly one. Future connections MUST go through this
-                # adapter or they trip Insufficient authentication (5).
-                details = getattr(ble_device, "details", None)
-                if isinstance(details, dict):
-                    bonded_source = details.get("source")
-                _LOGGER.info("Bond captured on adapter source=%s for %s", bonded_source, address)
-            except Exception as e:
-                _LOGGER.warning("Pairing on primary proxy failed (may not be required): %s", e)
-
-            await client.disconnect()
-
         except Exception as e:
-            _LOGGER.error("Failed to pair with RYSE device %s: %s", address, e)
-            return self.async_abort(reason="pairing_failed")
+            _LOGGER.error("Could not connect to %s: %s", address, e)
+            return self.async_abort(
+                reason="cannot_connect",
+                description_placeholders={"address": address, "error": str(e)},
+            )
+
+        if not client.is_connected:
+            _LOGGER.error("Connection completed but is_connected=False for %s", address)
+            return self.async_abort(
+                reason="cannot_connect",
+                description_placeholders={
+                    "address": address,
+                    "error": "is_connected was False after establish_connection",
+                },
+            )
+        _LOGGER.info("Connected to device: %s", address)
+
+        # Pair on this proxy to establish bonding keys. If this fails we
+        # ABORT — without a bond every subsequent command will fail with
+        # auth-5, so the user is better served by being told to retry now
+        # than by ending up with a half-broken entry.
+        try:
+            await client.pair()
+            _LOGGER.info("Paired with device on primary proxy: %s", address)
+        except Exception as e:
+            _LOGGER.error("Pair failed for %s: %s", address, e)
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            err_str = str(e)
+            if "Insufficient authentication" in err_str or "auth" in err_str.lower():
+                reason = "pairing_failed_auth"
+            else:
+                reason = "pairing_failed"
+            return self.async_abort(
+                reason=reason,
+                description_placeholders={"address": address, "error": err_str},
+            )
+
+        # Capture which adapter/proxy holds the bond — RYSE stores exactly
+        # one. Future connections MUST route through this proxy or they
+        # trip Insufficient authentication (5).
+        bonded_source = None
+        details = getattr(ble_device, "details", None)
+        if isinstance(details, dict):
+            bonded_source = details.get("source")
+        _LOGGER.info("Bond captured on adapter source=%s for %s", bonded_source, address)
+
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
         self._pending_entry_data = {
             "address": address,

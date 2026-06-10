@@ -14,11 +14,18 @@ from custom_components.ryse.repairs import (
 from tests import RYSE_ADDRESS
 
 
-def _make_scanner_device(source: str, rssi: int):
-    """Synthesize a BluetoothScannerDevice with the bits the repair flow reads."""
+def _make_scanner_device(source: str, rssi: int, in_pairing: bool = True):
+    """Synthesize a BluetoothScannerDevice with the bits the repair flow reads.
+
+    By default the advertisement carries the pairing-mode flag (bit 0x40)
+    set, since most tests need the shade to look pair-ready. Pass
+    in_pairing=False to simulate a shade that's not currently pairing.
+    """
     sd = MagicMock()
     sd.scanner.source = source
     sd.advertisement.rssi = rssi
+    flags = 0x40 if in_pairing else 0x00
+    sd.advertisement.manufacturer_data = {0x0409: bytes([flags, 50, 80])}
     sd.ble_device = MagicMock()
     return sd
 
@@ -83,6 +90,23 @@ async def test_repair_aborts_when_no_scanner_devices(flow_with_coordinator):
         result = await flow.async_step_repair()
     assert result["type"] == "abort"
     assert result["reason"] == "device_not_found"
+
+
+@pytest.mark.asyncio
+async def test_repair_aborts_when_shade_not_in_pairing_mode(flow_with_coordinator):
+    """Shade not advertising pairing flag → clear not_in_pairing_mode abort.
+
+    Catches this case BEFORE attempting the BLE pair handshake, so the user
+    gets a clear "press PAIR" message instead of a vague timeout/failure.
+    """
+    flow, _coord = flow_with_coordinator
+    with patch(
+        "custom_components.ryse.repairs.async_scanner_devices_by_address",
+        return_value=[_make_scanner_device("proxy", -50, in_pairing=False)],
+    ):
+        result = await flow.async_step_repair()
+    assert result["type"] == "abort"
+    assert result["reason"] == "not_in_pairing_mode"
 
 
 @pytest.mark.asyncio

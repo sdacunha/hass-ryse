@@ -49,6 +49,23 @@ class BleAuthFailedRepairFlow(RepairsFlow):
         )
         best = scanner_devices[0]
         best_source = getattr(best.scanner, "source", None)
+
+        # Confirm the shade is currently in pairing mode before we attempt
+        # to pair. RYSE shades advertise pairing mode by setting bit 0x40
+        # of the first manufacturer-data byte under id 0x0409. If we try
+        # to pair when the shade isn't accepting new bonds, we'll fail
+        # halfway through with a vague "repair_failed" — better to tell
+        # the user clearly that they need to press PAIR.
+        mfr_data = getattr(best.advertisement, "manufacturer_data", {}).get(0x0409)
+        in_pairing = bool(mfr_data and len(mfr_data) >= 1 and (mfr_data[0] & 0x40))
+        if not in_pairing:
+            _LOGGER.warning(
+                "[Repairs] %s is not in pairing mode (mfr_data[0]=%s) — asking user to press PAIR",
+                address,
+                f"0x{mfr_data[0]:02x}" if mfr_data else "<none>",
+            )
+            return self.async_abort(reason="not_in_pairing_mode")
+
         _LOGGER.info(
             "[Repairs] Pairing %s via proxy %s (rssi=%s)",
             address,
