@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Install Home Assistant + this integration's runtime deps into the active
-# Python environment. Works inside a venv on your host machine; also runs
-# automatically as the devcontainer's postCreateCommand if you ever bring
-# one back.
-set -euo pipefail
+
+set -e
 
 cd "$(dirname "$0")/.."
 

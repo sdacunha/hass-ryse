@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# Run Home Assistant with this repo's custom_component live-mounted via
-# PYTHONPATH. HA's state persists in ./config (gitignored). Use Ctrl-C
-# to stop.
-set -euo pipefail
+
+set -e
 
 cd "$(dirname "$0")/.."
 
-# Create a local config dir on first run.
+# Create config dir if not present
 if [[ ! -d "${PWD}/config" ]]; then
     mkdir -p "${PWD}/config"
-    hass --script ensure_config -c "${PWD}/config"
+    hass --config "${PWD}/config" --script ensure_config
 fi
 
-# Expose this checkout's custom_components/ to HA without a symlink.
-export PYTHONPATH="${PYTHONPATH:-}:${PWD}/custom_components"
+# Set the path to custom_components
+## This let's us have the structure we want <root>/custom_components/ryse
+## while at the same time have Home Assistant configuration inside <root>/config
+## without resulting to symlinks.
+export PYTHONPATH="${PYTHONPATH}:${PWD}/custom_components"
 
+# Start Home Assistant
 hass --config "${PWD}/config" --debug
